@@ -147,6 +147,14 @@ advanced arrays/lists, recursion) runs in the actual application.
 - Microsoft (2025) *IFormFile and multipart file uploads in ASP.NET Core*. Available at: https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads (Accessed: 14 September 2026).
 - Docker (2025) *Docker Compose overview*. Available at: https://docs.docker.com/compose/ (Accessed: 14 September 2026).
 
+## AI Usage Disclosure
+ 
+In line with The IIE's Intellectual Integrity and Property Rights Policy (IIE023), AI
+assistance was used during this project as follows:
+ 
+- **Google Gemini** was used for research support and drafting assistance during
+  development (see the shared session linked above under References & Attributions).
+
 ## Troubleshooting
 
 - **"ApiBaseUrl is not configured" error in the browser** — `wwwroot/appsettings.json` in the
