@@ -139,14 +139,14 @@ advanced arrays/lists, recursion) runs in the actual application.
 
 ## References
 
-- Microsoft (2025) *Minimal APIs overview*. Available at: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis (Accessed: 14 September 2026).
-- Microsoft (2025) *ASP.NET Core Blazor WebAssembly*. Available at: https://learn.microsoft.com/aspnet/core/blazor/hosting-models#blazor-webassembly (Accessed: 14 September 2026).
-- Microsoft (2025) *Generics (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics (Accessed: 14 September 2026).
-- Microsoft (2025) *Operator overloading (C# reference)*. Available at: https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading (Accessed: 14 September 2026).
+- Microsoft (2025) *Minimal APIs overview*. Available at: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis (Accessed: 9 September 2026).
+- Microsoft (2025) *ASP.NET Core Blazor WebAssembly*. Available at: https://learn.microsoft.com/aspnet/core/blazor/hosting-models#blazor-webassembly (Accessed: 11 September 2026).
+- Microsoft (2025) *Generics (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics (Accessed: 12 September 2026).
+- Microsoft (2025) *Operator overloading (C# reference)*. Available at: https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading (Accessed: 9 September 2026).
 - GeeksforGeeks. *C# | Operator Overloading*. Available at: https://www.geeksforgeeks.org/c-sharp/c-sharp-operator-overloading/
-- Microsoft (2025) *Arrays (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/ (Accessed: 14 September 2026).
-- Microsoft (2025) *IFormFile and multipart file uploads in ASP.NET Core*. Available at: https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads (Accessed: 14 September 2026).
-- Docker (2025) *Docker Compose overview*. Available at: https://docs.docker.com/compose/ (Accessed: 14 September 2026).
+- Microsoft (2025) *Arrays (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/ (Accessed: 9 September 2026).
+- Microsoft (2025) *IFormFile and multipart file uploads in ASP.NET Core*. Available at: https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads (Accessed: 11 September 2026).
+- Zipit Wireless. *What Are IoT Sensors? Types, Uses, and Examples*. Available at: https://www.zipitwireless.com/blog/what-are-iot-sensors-types-uses-and-examples (Accessed: 11 September 2026).
 
 ## AI Usage Disclosure
  
