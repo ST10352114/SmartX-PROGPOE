@@ -1,3 +1,6 @@
+// Source attribution: Microsoft .NET Class Libraries Documentation
+// URL: https://learn.microsoft.com/en-us/dotnet/standard/class-libraries
+
 using System.Text.Json;
 
 namespace SmartXOne.Shared.Contracts;
