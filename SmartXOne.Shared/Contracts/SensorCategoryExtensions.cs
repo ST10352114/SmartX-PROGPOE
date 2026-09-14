@@ -6,6 +6,9 @@ namespace SmartXOne.Shared.Contracts;
 /// (can show it as a placeholder/label next to the input).
 /// </summary>
 public static class SensorCategoryExtensions
+
+// Source attribution: Zipit Wireless - What Are IoT Sensors? Types, Uses, and Examples
+// URL: https://www.zipitwireless.com/blog/what-are-iot-sensors-types-uses-and-examples
 {
     public static string DefaultUnit(this SensorCategory category) => category switch
     {
