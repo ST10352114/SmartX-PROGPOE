@@ -142,7 +142,6 @@ advanced arrays/lists, recursion) runs in the actual application.
 - Microsoft (2025) *Minimal APIs overview*. Available at: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis (Accessed: 9 September 2026).
 - Microsoft (2025) *ASP.NET Core Blazor WebAssembly*. Available at: https://learn.microsoft.com/aspnet/core/blazor/hosting-models#blazor-webassembly (Accessed: 11 September 2026).
 - Microsoft (2025) *Generics (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics (Accessed: 12 September 2026).
-- Microsoft (2025) *Operator overloading (C# reference)*. Available at: https://learn.microsoft.com/dotnet/csharp/language-reference/operators/operator-overloading (Accessed: 9 September 2026).
 - GeeksforGeeks. *C# | Operator Overloading*. Available at: https://www.geeksforgeeks.org/c-sharp/c-sharp-operator-overloading/
 - Microsoft (2025) *Arrays (C# programming guide)*. Available at: https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/ (Accessed: 9 September 2026).
 - Microsoft. *Observability with OpenTelemetry in .NET*. Available at: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel (Accessed: 11 September 2026).
