@@ -131,7 +131,7 @@ SmartXOne.sln
 
 ## Video Demonstration
 
-[Watch the Part 1 demo video](PASTE_YOUR_YOUTUBE_LINK_HERE)
+[Watch the Part 1 demo video](https://youtu.be/qF8Dhm-di1Q?si=Jetiuq1pzNJEf0Q5)
 
 The video walks through sensor registration, live telemetry ingestion, file upload, the
 anomaly spotlight, and shows where each required C# concept (generics, operator overloading,
