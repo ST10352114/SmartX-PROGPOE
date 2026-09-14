@@ -65,7 +65,7 @@ public static class DeploymentTreeValidator //validates the  tree of commands
             return true;
         }
 
-        // --- Recursive step --------------------------------------------
+        // 
         // Ask each child subtree the same question, one level deeper.
         foreach (var child in node.Children)
         {
