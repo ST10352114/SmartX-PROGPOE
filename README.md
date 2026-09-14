@@ -148,7 +148,8 @@ advanced arrays/lists, recursion) runs in the actual application.
 - Microsoft. *Observability with OpenTelemetry in .NET*. Available at: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel (Accessed: 11 September 2026).
 - Microsoft (2025) *IFormFile and multipart file uploads in ASP.NET Core*. Available at: https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads (Accessed: 11 September 2026).
 - Zipit Wireless. *What Are IoT Sensors? Types, Uses, and Examples*. Available at: https://www.zipitwireless.com/blog/what-are-iot-sensors-types-uses-and-examples (Accessed: 11 September 2026).
-
+- Yigitbasioglu, O.M. and Velcu, O. (2012) 'A review of dashboards in performance management: implications for design and research', *International Journal of Accounting Information Systems*, 13(1), pp. 41–59.
+- 
 ## AI Usage Disclosure
  
 In line with The IIE's Intellectual Integrity and Property Rights Policy (IIE023), AI
