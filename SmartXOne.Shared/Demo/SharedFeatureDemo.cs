@@ -28,6 +28,8 @@ public static class SharedFeatureDemo
     private static string DemoGenerics()
     {
         // One generic type carries three different value types, each stays typed.
+        // Source attribution: Microsoft .NET Observability with OpenTelemetry Documentation
+        // URL: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel
         TelemetryPacket<float> moisture = TelemetryPacket.Create("soil-01", 42.7f, "%");
         TelemetryPacket<int> wattage = TelemetryPacket.Create("meter-01", 1350, "W");
         TelemetryPacket<bool> valve = TelemetryPacket.Create("valve-01", true, "state");
