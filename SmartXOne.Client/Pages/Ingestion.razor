@@ -1,0 +1,444 @@
+@page "/ingestion"
+@using System.ComponentModel.DataAnnotations
+@implements IDisposable
+@inject SmartXApiClient Api
+
+<PageTitle>Sensor Data Ingestion and Telemetry</PageTitle>
+
+<h1>Sensor Data Ingestion and Telemetry</h1>
+<p class="lead">Register mesh sensors, ingest telemetry, attach files, and monitor live readings.</p>
+
+<AnomalySpotlightCard Sensors="_sensors" />
+
+<div class="row g-4">
+    <div class="col-12 col-lg-5">
+        <div class="card h-100">
+            <div class="card-header">Register a sensor</div>
+            <div class="card-body">
+                <EditForm Model="_registerForm" OnValidSubmit="RegisterSensorAsync">
+                    <DataAnnotationsValidator />
+                    <div class="mb-2">
+                        <label class="form-label">Sensor ID (MAC / unique id)</label>
+                        <InputText class="form-control" @bind-Value="_registerForm.SensorId" placeholder="AA:BB:CC:DD:EE:01" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Deployment node ID (location)</label>
+                        <input class="form-control" list="knownDeploymentNodes" @bind="_registerForm.DeploymentNodeId" placeholder="e.g. NODE-A3-07" />
+                        <datalist id="knownDeploymentNodes">
+                            @foreach (var id in KnownDeploymentNodeIds)
+                            {
+                                <option value="@id"></option>
+                            }
+                        </datalist>
+                        <div class="form-text">Must match a node already configured in the gateway's deployment tree.</div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Category</label>
+                        <InputSelect class="form-select" @bind-Value="_registerForm.Category">
+                            <option value="@SensorCategory.Environmental">Environmental (float, %)</option>
+                            <option value="@SensorCategory.PowerConsumption">Power consumption (int, W)</option>
+                            <option value="@SensorCategory.Actuator">Actuator (bool, state)</option>
+                        </InputSelect>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Display name (optional)</label>
+                        <InputText class="form-control" @bind-Value="_registerForm.DisplayName" />
+                    </div>
+                    <button class="btn btn-primary" type="submit" disabled="@_registering">
+                        @(_registering ? "Registering..." : "Register sensor")
+                    </button>
+                </EditForm>
+
+                @if (_registerMessage is not null)
+                {
+                    <div class="alert @(_registerSuccess ? "alert-success" : "alert-danger") mt-3 py-2 mb-0">@_registerMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
+        <div class="card h-100">
+            <div class="card-header">Simulate telemetry</div>
+            <div class="card-body">
+                <p class="text-body-secondary">
+                    No physical sensors are attached yet - use this to generate realistic-looking
+                    readings (moisture %, wattage W, valve state) for every registered sensor, so
+                    the table below has live data without real hardware.
+                </p>
+                <div class="d-flex gap-3 align-items-center flex-wrap">
+                    <button class="btn btn-outline-primary" @onclick="GenerateOnceAsync" disabled="@(_sensors.Count == 0 || _generating)">
+                        Generate one round now
+                    </button>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="autoSim" @bind="_autoSimulate" @bind:after="OnAutoSimulateChanged" />
+                        <label class="form-check-label" for="autoSim">Auto-generate every 5s</label>
+                    </div>
+                    @if (_generating)
+                    {
+                        <span class="text-body-secondary"><em>Posting readings&hellip;</em></span>
+                    }
+                </div>
+
+                @if (_simulateError is not null)
+                {
+                    <div class="alert alert-warning mt-3 py-2 mb-0">@_simulateError</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">Attach a file to a sensor</div>
+    <div class="card-body">
+        @if (_sensors.Count == 0)
+        {
+            <p class="text-body-secondary mb-0">Register a sensor first.</p>
+        }
+        else
+        {
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-4">
+                    <label class="form-label">Sensor</label>
+                    <select class="form-select" @bind="_uploadSensorId">
+                        @foreach (var sensor in _sensors)
+                        {
+                            <option value="@sensor.SensorId">@sensor.SensorId@(sensor.DisplayName is null ? "" : $" ({sensor.DisplayName})")</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label">File (log / photo / config)</label>
+                    <InputFile OnChange="UploadProfileAsync" class="form-control" />
+                </div>
+                <div class="col-12 col-md-2">
+                    @if (_uploading)
+                    {
+                        <span class="text-body-secondary"><em>Uploading&hellip;</em></span>
+                    }
+                </div>
+            </div>
+            @if (_uploadMessage is not null)
+            {
+                <div class="alert @(_uploadSuccess ? "alert-success" : "alert-danger") mt-3 py-2 mb-0">@_uploadMessage</div>
+            }
+        }
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Registered sensors</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshSensorsAsync">Refresh</button>
+    </div>
+    <div class="card-body">
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger py-2 mb-0">@_loadError</div>
+        }
+        else if (_sensors.Count == 0)
+        {
+            <p class="text-body-secondary mb-0"><em>No sensors registered yet.</em></p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Sensor ID</th>
+                            <th>Location</th>
+                            <th>Category</th>
+                            <th>Display name</th>
+                            <th>Latest reading</th>
+                            <th>Change</th>
+                            <th>Profile file</th>
+                            <th>History</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var sensor in _sensors)
+                        {
+                            <tr>
+                                <td>@sensor.SensorId</td>
+                                <td>@sensor.DeploymentNodeId</td>
+                                <td>@sensor.Category</td>
+                                <td>@(sensor.DisplayName ?? "-")</td>
+                                <td>
+                                    @if (sensor.LatestReading is { } reading)
+                                    {
+                                        @($"{reading.FormattedValue} {reading.Unit}")
+                                        <span class="text-body-secondary d-block small">@reading.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-body-secondary"><em>No reading yet</em></span>
+                                    }
+                                </td>
+                                <td>@FormatChange(sensor.LatestReading)</td>
+                                <td>@(sensor.ProfileFileName ?? "-")</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleHistoryAsync(sensor.SensorId)">
+                                        @(_expandedSensorId == sensor.SensorId ? "Hide" : "Show")
+                                    </button>
+                                </td>
+                            </tr>
+                            @if (_expandedSensorId == sensor.SensorId)
+                            {
+                                <tr>
+                                    <td colspan="8" class="bg-body-tertiary">
+                                        @if (_historyLoading)
+                                        {
+                                            <em class="text-body-secondary">Loading history&hellip;</em>
+                                        }
+                                        else if (_history.Count == 0)
+                                        {
+                                            <em class="text-body-secondary">No stored readings yet.</em>
+                                        }
+                                        else
+                                        {
+                                            <div class="d-flex flex-wrap gap-2 small">
+                                                @foreach (var entry in _history)
+                                                {
+                                                    <span class="badge text-bg-light border fw-normal">
+                                                        @entry.FormattedValue @entry.Unit
+                                                        <span class="text-body-secondary">@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    // Leaf nodes from the gateway's seeded deployment tree (SmartX.Api/Sensors/DeploymentSeed.cs).
+    // Offered as datalist suggestions only - the API is the source of truth and
+    // rejects anything that isn't actually in the tree.
+    private static readonly string[] KnownDeploymentNodeIds = ["NODE-A3-07", "NODE-A3-08", "NODE-B1-01"];
+
+    private readonly RegisterSensorForm _registerForm = new();
+    private List<SensorSummary> _sensors = [];
+    private string? _loadError;
+
+    private bool _registering;
+    private bool _registerSuccess;
+    private string? _registerMessage;
+
+    private bool _generating;
+    private string? _simulateError;
+    private bool _autoSimulate;
+    private CancellationTokenSource? _autoSimulateCts;
+    private bool _disposed;
+
+    private string? _uploadSensorId;
+    private bool _uploading;
+    private bool _uploadSuccess;
+    private string? _uploadMessage;
+
+    private string? _expandedSensorId;
+    private bool _historyLoading;
+    private List<TelemetryReadingDto> _history = [];
+
+    protected override Task OnInitializedAsync() => RefreshSensorsAsync();
+
+    private async Task RefreshSensorsAsync()
+    {
+        _loadError = null;
+        try
+        {
+            _sensors = await Api.GetSensorsAsync();
+            _uploadSensorId ??= _sensors.FirstOrDefault()?.SensorId;
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+    }
+
+    private async Task RegisterSensorAsync()
+    {
+        _registering = true;
+        _registerMessage = null;
+        try
+        {
+            var request = new RegisterSensorRequest(
+                _registerForm.SensorId.Trim(),
+                _registerForm.DeploymentNodeId.Trim(),
+                _registerForm.Category,
+                string.IsNullOrWhiteSpace(_registerForm.DisplayName) ? null : _registerForm.DisplayName.Trim());
+
+            var result = await Api.RegisterSensorAsync(request);
+            _registerSuccess = result.Success;
+            _registerMessage = result.Success ? $"Registered '{request.SensorId}'." : result.Error;
+
+            if (result.Success)
+            {
+                _registerForm.Reset();
+                await RefreshSensorsAsync();
+            }
+        }
+        finally
+        {
+            _registering = false;
+        }
+    }
+
+    private async Task GenerateOnceAsync()
+    {
+        _generating = true;
+        _simulateError = null;
+        try
+        {
+            foreach (var sensor in _sensors)
+            {
+                var value = MockTelemetryGenerator.NextValue(sensor.Category, sensor.LatestReading);
+                var result = await Api.SubmitReadingAsync(sensor.SensorId, value, unit: null);
+                if (!result.Success)
+                {
+                    _simulateError = $"{sensor.SensorId}: {result.Error}";
+                }
+            }
+
+            await RefreshSensorsAsync();
+        }
+        finally
+        {
+            _generating = false;
+        }
+    }
+
+    private void OnAutoSimulateChanged()
+    {
+        _autoSimulateCts?.Cancel();
+        _autoSimulateCts = null;
+
+        if (!_autoSimulate)
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _autoSimulateCts = cts;
+        _ = AutoSimulateLoopAsync(cts.Token);
+    }
+
+    private async Task AutoSimulateLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await GenerateOnceAsync();
+                if (!_disposed)
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped via the toggle or page navigation - expected.
+        }
+    }
+
+    private async Task UploadProfileAsync(InputFileChangeEventArgs args)
+    {
+        if (_uploadSensorId is null)
+        {
+            return;
+        }
+
+        _uploading = true;
+        _uploadMessage = null;
+        try
+        {
+            var result = await Api.UploadProfileAsync(_uploadSensorId, args.File);
+            _uploadSuccess = result.Success;
+            _uploadMessage = result.Success ? $"Attached '{args.File.Name}' to '{_uploadSensorId}'." : result.Error;
+
+            if (result.Success)
+            {
+                await RefreshSensorsAsync();
+            }
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private async Task ToggleHistoryAsync(string sensorId)
+    {
+        if (_expandedSensorId == sensorId)
+        {
+            _expandedSensorId = null;
+            _history = [];
+            return;
+        }
+
+        _expandedSensorId = sensorId;
+        _historyLoading = true;
+        _history = [];
+        try
+        {
+            _history = await Api.GetSensorHistoryAsync(sensorId);
+        }
+        finally
+        {
+            _historyLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// "Change since last reading" - <c>reading.ChangeSinceLast</c> is
+    /// <c>current - previous</c> via <c>SensorReading operator -</c>, computed
+    /// server-side in <c>SensorRepository.SubmitReading</c>.
+    /// </summary>
+    private static string FormatChange(TelemetryReadingDto? reading)
+    {
+        if (reading?.ChangeSinceLast is not { } change)
+        {
+            return "-";
+        }
+
+        var sign = change > 0 ? "+" : "";
+        return $"{sign}{change:0.#} {reading.Unit}";
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _autoSimulateCts?.Cancel();
+    }
+
+    private sealed class RegisterSensorForm
+    {
+        [Required]
+        public string SensorId { get; set; } = "";
+
+        [Required]
+        public string DeploymentNodeId { get; set; } = "";
+
+        public SensorCategory Category { get; set; } = SensorCategory.Environmental;
+
+        public string? DisplayName { get; set; }
+
+        public void Reset()
+        {
+            SensorId = "";
+            DeploymentNodeId = "";
+            Category = SensorCategory.Environmental;
+            DisplayName = null;
+        }
+    }
+}

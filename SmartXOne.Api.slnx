@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="SmartXOne.Api/SmartXOne.Api.csproj" />
+  <Project Path="SmartXOne.Client/SmartXOne.Client.csproj" />
+  <Project Path="SmartXOne.Shared/SmartXOne.Shared.csproj" />
+</Solution>

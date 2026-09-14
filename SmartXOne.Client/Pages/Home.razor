@@ -1,0 +1,94 @@
+﻿@page "/"
+@inject NavigationManager Nav
+@inject SmartXOne.Client.Services.SmartXApiClient Api
+
+<PageTitle>Smart-X Gateway</PageTitle>
+
+<h1>Smart-X Data Ingestion and Validation Gateway</h1>
+<p class="lead">
+    A simulated IoT mesh ecosystem for monitoring distributed environments.
+    This build covers <strong>Part 1</strong> only.
+</p>
+
+<div class="row g-3 mt-1">
+    @foreach (var item in FeatureMenu.Items)
+    {
+        <div class="col-12 col-lg-4">
+            <div class="card h-100 @(item.Enabled ? "border-primary" : "border-secondary")">
+                <div class="card-body d-flex flex-column">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="card-title mb-0">@item.Title</h5>
+                        @if (item.Enabled)
+                        {
+                            <span class="badge bg-primary ms-2">Active</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary ms-2">@item.StatusLabel</span>
+                        }
+                    </div>
+                    <p class="card-text flex-grow-1 text-body-secondary">@item.Description</p>
+
+                    @if (item.Enabled)
+                    {
+                        <button class="btn btn-primary mt-2" @onclick="() => Nav.NavigateTo(item.Href)">
+                            Open
+                        </button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-outline-secondary mt-2" disabled>
+                            Not available in Part 1
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<hr class="my-4" />
+
+<h2 class="h5">Gateway connectivity</h2>
+@if (_error is not null)
+{
+    <div class="alert alert-danger py-2">
+        <strong>API unreachable.</strong> @_error
+        <button class="btn btn-sm btn-outline-danger ms-2" @onclick="LoadAsync">Retry</button>
+    </div>
+}
+else if (_info is null)
+{
+    <p class="text-body-secondary"><em>Contacting the gateway&hellip;</em></p>
+}
+else
+{
+    <p class="text-success mb-0">
+        &#10003; @_info.Message
+        <span class="text-body-secondary">
+            (@_info.Service, v@_info.Version, @_info.Environment,
+            server @_info.ServerTimeUtc.ToString("u"))
+        </span>
+    </p>
+}
+
+@code {
+    private GatewayInfo? _info;
+    private string? _error;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        _info = null;
+        try
+        {
+            _info = await Api.GetGatewayInfoAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

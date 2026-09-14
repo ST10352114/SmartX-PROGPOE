@@ -1,0 +1,68 @@
+@* Dynamic engagement feature: highlights whichever registered sensor's latest
+   reading is currently furthest outside its category's expected band (see
+   AnomalyScorer). Recomputes from the Sensors parameter on every render, so
+   it updates live as Phase 5's simulated readings come in - no polling or
+   extra API calls of its own, no page refresh needed. *@
+
+<div class="card mb-4 border-@BorderClass">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Anomaly spotlight</span>
+        @if (Spotlight is not null)
+        {
+            <span class="badge @BadgeClass">@Spotlight.Severity</span>
+        }
+    </div>
+    <div class="card-body">
+        @if (Spotlight is null)
+        {
+            <p class="text-body-secondary mb-0">
+                <em>
+                    @(Sensors.Count == 0
+                        ? "Register a sensor to start monitoring."
+                        : "No readings yet - generate telemetry below to see the spotlight light up.")
+                </em>
+            </p>
+        }
+        else
+        {
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+                <div>
+                    <h5 class="mb-1">
+                        @Spotlight.Sensor.SensorId
+                        <span class="text-body-secondary fw-normal">(@Spotlight.Sensor.Category)</span>
+                    </h5>
+                    <p class="mb-1">@Spotlight.Explanation</p>
+                    <p class="text-body-secondary small mb-0">
+                        Location @Spotlight.Sensor.DeploymentNodeId &middot;
+                        updated @Spotlight.Sensor.LatestReading!.Timestamp.ToLocalTime().ToString("HH:mm:ss")
+                    </p>
+                </div>
+                <div class="text-end">
+                    <div class="fs-4 fw-semibold">@Spotlight.Score.ToString("P0")</div>
+                    <div class="text-body-secondary small">deviation</div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SensorSummary> Sensors { get; set; } = [];
+
+    private AnomalyAssessment? Spotlight => AnomalyScorer.FindSpotlight(Sensors);
+
+    private string BorderClass => Spotlight?.Severity switch
+    {
+        AnomalySeverity.Alert => "danger",
+        AnomalySeverity.Watch => "warning",
+        _ => "secondary",
+    };
+
+    private string BadgeClass => Spotlight?.Severity switch
+    {
+        AnomalySeverity.Alert => "bg-danger",
+        AnomalySeverity.Watch => "bg-warning text-dark",
+        _ => "bg-secondary",
+    };
+}
