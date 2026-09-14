@@ -1,3 +1,7 @@
+// Source attribution: Yigitbasioglu, O.M. and Velcu, O. (2012) 
+//'A review of dashboards in performance management: implications for design and research', International Journal of Accounting Information Systems, 13(1),
+// pp. 41–59.
+
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using SmartXOne.Client;
