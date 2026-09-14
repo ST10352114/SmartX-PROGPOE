@@ -11,3 +11,4 @@ public enum DeploymentLevel
     SubZone = 2,
     Node = 3,
 }
+//nodes are seeded
