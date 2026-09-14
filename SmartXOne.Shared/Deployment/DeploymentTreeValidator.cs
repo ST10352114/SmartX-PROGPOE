@@ -6,7 +6,7 @@ namespace SmartXOne.Shared.Deployment;
 /// somewhere inside it. Used when registering a sensor: the location the sensor
 /// claims to be at must be a real node in the configured deployment.
 /// </summary>
-public static class DeploymentTreeValidator
+public static class DeploymentTreeValidator //validates the  tree of commands 
 {
     /// <summary>
     /// Safety cap on recursion depth. A well-formed deployment is only four
