@@ -1,3 +1,6 @@
+// Source attribution: Microsoft ASP.NET Web APIs Overview
+// URL: https://dotnet.microsoft.com/en-us/apps/aspnet/apis
+
 using SmartXOne.Shared.Telemetry;
 
 namespace SmartXOne.Api.Sensors;

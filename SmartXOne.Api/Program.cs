@@ -1,3 +1,6 @@
+// Source attribution: Adapted from Telerik Blazor FAQ 
+// https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
+
 using SmartXOne.Api.Sensors;
 using SmartXOne.Shared.Contracts;
 using SmartXOne.Shared.Demo;
@@ -50,7 +53,7 @@ app.MapGet("/api/demo/oop", () => Results.Ok(SharedFeatureDemo.Run()));
 // --- Phase 4: sensor registration, telemetry submission, listing, profile upload ---
 app.MapSensorEndpoints();
 
-// Also write the same report to the console on start-up.
+
 var demo = SharedFeatureDemo.Run();
 app.Logger.LogInformation("Shared feature demo:\n  Generics: {Generics}\n  Operators: {Operators}\n  Arrays: {Arrays}\n  Recursion: {Recursion}",
     demo.Generics, demo.OperatorOverloading, demo.AdvancedArrays, demo.Recursion);
