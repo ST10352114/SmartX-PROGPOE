@@ -18,3 +18,4 @@ public static class SensorCategoryExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(category), category, message: null),
     };
 }
+//
