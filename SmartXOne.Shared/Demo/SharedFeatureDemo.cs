@@ -42,6 +42,8 @@ public static class SharedFeatureDemo
     }
 
     // 3b - OPERATOR OVERLOADING
+    //// Source attribution: GeeksforGeeks - C# Operator Overloading
+    // URL: https://www.geeksforgeeks.org/c-sharp/c-sharp-operator-overloading/
     private static string DemoOperatorOverloading()
     {
         var meterA = new SensorReading("meter-A", 1200, "W");
