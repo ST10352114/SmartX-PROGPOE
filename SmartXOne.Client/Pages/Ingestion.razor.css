@@ -10,7 +10,7 @@
     gap: 0.25rem;
     padding: 1.5rem 1rem;
     border: 2px dashed var(--bs-border-color);
-    border-radius: 0.5rem;
+    border-radius: var(--sx-radius-md, 0.5rem);
     text-align: center;
     cursor: pointer;
     transition: border-color 0.15s ease, background-color 0.15s ease;

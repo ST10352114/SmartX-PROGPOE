@@ -3,19 +3,20 @@
    live dashboard above it - refreshes itself after every mutating action. *@
 @using System.ComponentModel.DataAnnotations
 @inject SmartXApiClient Api
+@inject ToastService Toasts
 
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span>Reported issues</span>
         <div class="d-flex gap-2">
-            <select class="form-select form-select-sm" style="width: auto;" @bind="_filterSeverity" @bind:after="RefreshAsync">
+            <select class="form-select form-select-sm" style="width: auto;" aria-label="Filter issues by severity" @bind="_filterSeverity" @bind:after="RefreshAsync">
                 <option value="">All severities</option>
                 @foreach (var s in Enum.GetValues<IssueSeverity>())
                 {
                     <option value="@s">@s</option>
                 }
             </select>
-            <select class="form-select form-select-sm" style="width: auto;" @bind="_filterStatus" @bind:after="RefreshAsync">
+            <select class="form-select form-select-sm" style="width: auto;" aria-label="Filter issues by status" @bind="_filterStatus" @bind:after="RefreshAsync">
                 <option value="">All statuses</option>
                 @foreach (var s in Enum.GetValues<IssueStatus>())
                 {
@@ -29,8 +30,9 @@
             <DataAnnotationsValidator />
             <div class="row g-2 align-items-end">
                 <div class="col-12 col-md-5">
-                    <label class="form-label">Description</label>
-                    <InputText class="form-control" @bind-Value="_newIssue.Description" placeholder="e.g. Moisture sensor reads flat for 10 minutes" />
+                    <label class="form-label" for="issueDescriptionInput">Description</label>
+                    <InputText id="issueDescriptionInput" class="form-control" @bind-Value="_newIssue.Description" placeholder="e.g. Moisture sensor reads flat for 10 minutes" />
+                    <ValidationMessage For="@(() => _newIssue.Description)" class="text-danger small" />
                 </div>
                 <div class="col-6 col-md-3">
                     <label class="form-label">Sensor (optional)</label>
@@ -68,7 +70,10 @@
 
         @if (_loading)
         {
-            <p class="text-body-secondary mb-0"><em>Loading&hellip;</em></p>
+            <div class="d-flex align-items-center gap-2 text-body-secondary">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>Loading issues&hellip;</span>
+            </div>
         }
         else if (_issues.Count == 0)
         {
@@ -148,12 +153,14 @@
             var result = await Api.CreateIssueAsync(request);
             if (result.Success)
             {
+                Toasts.Show("Issue reported.", ToastLevel.Success);
                 _newIssue.Reset();
                 await RefreshAsync();
             }
             else
             {
                 _submitError = result.Error;
+                Toasts.Show(result.Error ?? "Failed to report issue.", ToastLevel.Danger);
             }
         }
         finally
@@ -164,13 +171,17 @@
 
     private async Task AcknowledgeAsync(string id)
     {
-        await Api.AcknowledgeIssueAsync(id);
+        var result = await Api.AcknowledgeIssueAsync(id);
+        Toasts.Show(result.Success ? "Issue acknowledged." : result.Error ?? "Failed to acknowledge issue.",
+            result.Success ? ToastLevel.Info : ToastLevel.Danger);
         await RefreshAsync();
     }
 
     private async Task ResolveAsync(string id)
     {
-        await Api.ResolveIssueAsync(id);
+        var result = await Api.ResolveIssueAsync(id);
+        Toasts.Show(result.Success ? "Issue resolved." : result.Error ?? "Failed to resolve issue.",
+            result.Success ? ToastLevel.Success : ToastLevel.Danger);
         await RefreshAsync();
     }
 

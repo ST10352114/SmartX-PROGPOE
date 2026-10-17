@@ -5,27 +5,28 @@
    of its own except fetching a changed sensor's sparkline history. *@
 @using System.Globalization
 @inject SmartXApiClient Api
+@inject ToastService Toasts
 
 <div class="row g-3 mb-3">
-    <div class="col-6 col-lg-3">
+    <div class="col-12 col-sm-6 col-lg-3">
         <div class="kpi-card">
             <div class="kpi-card__value">@Sensors.Count</div>
             <div class="kpi-card__label">Active devices</div>
         </div>
     </div>
-    <div class="col-6 col-lg-3">
+    <div class="col-12 col-sm-6 col-lg-3">
         <div class="kpi-card">
             <div class="kpi-card__value">@_packetsPerMinute</div>
             <div class="kpi-card__label">Packets / min</div>
         </div>
     </div>
-    <div class="col-6 col-lg-3">
+    <div class="col-12 col-sm-6 col-lg-3">
         <div class="kpi-card @(OpenIssueCount > 0 ? "kpi-card--warn" : "")">
             <div class="kpi-card__value">@OpenIssueCount</div>
             <div class="kpi-card__label">Open issues</div>
         </div>
     </div>
-    <div class="col-6 col-lg-3">
+    <div class="col-12 col-sm-6 col-lg-3">
         <div class="kpi-card @(_alertCount > 0 ? "kpi-card--danger" : "")">
             <div class="kpi-card__value">@_alertCount</div>
             <div class="kpi-card__label">Active alerts</div>
@@ -64,16 +65,6 @@
     </div>
 }
 
-<div class="toast-stack" aria-live="polite" aria-atomic="true">
-    @foreach (var toast in _toasts)
-    {
-        <div class="toast-item toast-item--@toast.Severity.ToString().ToLowerInvariant()">
-            <span>@toast.Message</span>
-            <button type="button" class="toast-item__close" aria-label="Dismiss" @onclick="() => DismissToast(toast.Id)">&times;</button>
-        </div>
-    }
-</div>
-
 @code {
     [Parameter, EditorRequired]
     public IReadOnlyList<SensorSummary> Sensors { get; set; } = [];
@@ -89,8 +80,6 @@
     private readonly List<DateTimeOffset> _recentReadingTimestamps = [];
     private readonly Dictionary<string, List<float>> _sparklineCache = [];
     private readonly Dictionary<string, AnomalySeverity> _previousSeverity = [];
-    private readonly List<ToastMessage> _toasts = [];
-    private int _toastSeq;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -142,23 +131,12 @@
 
             if (assessment.Severity == AnomalySeverity.Alert && previous != AnomalySeverity.Alert)
             {
-                var toast = new ToastMessage(++_toastSeq, $"{assessment.Sensor.SensorId}: {assessment.Explanation}", assessment.Severity);
-                _toasts.Add(toast);
-                _ = AutoDismissAsync(toast.Id);
+                Toasts.Show($"{assessment.Sensor.SensorId}: {assessment.Explanation}", ToastLevel.Danger);
             }
 
             _previousSeverity[assessment.Sensor.SensorId] = assessment.Severity;
         }
     }
-
-    private async Task AutoDismissAsync(int toastId)
-    {
-        await Task.Delay(TimeSpan.FromSeconds(6));
-        _toasts.RemoveAll(t => t.Id == toastId);
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private void DismissToast(int toastId) => _toasts.RemoveAll(t => t.Id == toastId);
 
     private static string SparklinePoints(List<float> values)
     {
@@ -188,6 +166,4 @@
         AnomalySeverity.Watch => "gauge__fill--warning",
         _ => "gauge__fill--ok",
     };
-
-    private sealed record ToastMessage(int Id, string Message, AnomalySeverity Severity);
 }

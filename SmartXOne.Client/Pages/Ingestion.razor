@@ -2,6 +2,7 @@
 @using System.ComponentModel.DataAnnotations
 @implements IDisposable
 @inject SmartXApiClient Api
+@inject ToastService Toasts
 
 <PageTitle>Sensor Data Ingestion and Telemetry</PageTitle>
 
@@ -19,18 +20,20 @@
                 <EditForm Model="_registerForm" OnValidSubmit="RegisterSensorAsync">
                     <DataAnnotationsValidator />
                     <div class="mb-2">
-                        <label class="form-label">Sensor ID (MAC / unique id)</label>
-                        <InputText class="form-control" @bind-Value="_registerForm.SensorId" placeholder="AA:BB:CC:DD:EE:01" />
+                        <label class="form-label" for="sensorIdInput">Sensor ID (MAC / unique id)</label>
+                        <InputText id="sensorIdInput" class="form-control" @bind-Value="_registerForm.SensorId" placeholder="AA:BB:CC:DD:EE:01" />
+                        <ValidationMessage For="@(() => _registerForm.SensorId)" class="text-danger small" />
                     </div>
                     <div class="mb-2">
-                        <label class="form-label">Deployment node ID (location)</label>
-                        <input class="form-control" list="knownDeploymentNodes" @bind="_registerForm.DeploymentNodeId" placeholder="e.g. NODE-A3-07" />
+                        <label class="form-label" for="deploymentNodeInput">Deployment node ID (location)</label>
+                        <input id="deploymentNodeInput" class="form-control" list="knownDeploymentNodes" @bind="_registerForm.DeploymentNodeId" placeholder="e.g. NODE-A3-07" />
                         <datalist id="knownDeploymentNodes">
                             @foreach (var id in KnownDeploymentNodeIds)
                             {
                                 <option value="@id"></option>
                             }
                         </datalist>
+                        <ValidationMessage For="@(() => _registerForm.DeploymentNodeId)" class="text-danger small" />
                         <div class="form-text">Must match a node already configured in the gateway's deployment tree.</div>
                     </div>
                     <div class="mb-2">
@@ -160,7 +163,14 @@
         <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshSensorsAsync">Refresh</button>
     </div>
     <div class="card-body">
-        @if (_loadError is not null)
+        @if (_initialLoading)
+        {
+            <div class="d-flex align-items-center gap-2 text-body-secondary">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>Loading sensors&hellip;</span>
+            </div>
+        }
+        else if (_loadError is not null)
         {
             <div class="alert alert-danger py-2 mb-0">@_loadError</div>
         }
@@ -267,6 +277,7 @@
     private readonly RegisterSensorForm _registerForm = new();
     private List<SensorSummary> _sensors = [];
     private string? _loadError;
+    private bool _initialLoading = true;
 
     private bool _registering;
     private bool _registerSuccess;
@@ -316,6 +327,10 @@
         {
             _loadError = ex.Message;
         }
+        finally
+        {
+            _initialLoading = false;
+        }
     }
 
     /// <summary>
@@ -358,6 +373,7 @@
             var result = await Api.RegisterSensorAsync(request);
             _registerSuccess = result.Success;
             _registerMessage = result.Success ? $"Registered '{request.SensorId}'." : result.Error;
+            Toasts.Show(_registerMessage!, result.Success ? ToastLevel.Success : ToastLevel.Danger);
 
             if (result.Success)
             {
@@ -456,6 +472,7 @@
 
             _uploadSuccess = result.Success;
             _uploadMessage = result.Success ? $"Attached '{args.File.Name}' to '{_uploadSensorId}'." : result.Error;
+            Toasts.Show(_uploadMessage!, result.Success ? ToastLevel.Success : ToastLevel.Danger);
 
             if (result.Success)
             {

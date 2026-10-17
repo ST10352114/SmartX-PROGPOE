@@ -1,9 +1,55 @@
+/* Design tokens (Fix D) - a small, consistent spacing/radius/type scale laid
+   on top of Bootstrap's own variables. Every page loads this one stylesheet,
+   and the newer component styles (LiveDashboard, ToastHost, the upload
+   dropzone) reference these tokens rather than one-off magic numbers. */
+:root {
+    --sx-space-1: 0.25rem;
+    --sx-space-2: 0.5rem;
+    --sx-space-3: 0.75rem;
+    --sx-space-4: 1rem;
+    --sx-space-5: 1.5rem;
+    --sx-space-6: 2.5rem;
+
+    --sx-radius-sm: 0.375rem;
+    --sx-radius-md: 0.5rem;
+    --sx-radius-lg: 0.75rem;
+
+    --sx-fs-sm: 0.8125rem;
+    --sx-fs-base: 1rem;
+    --sx-fs-lg: 1.125rem;
+    --sx-fs-xl: 1.5rem;
+    --sx-fs-2xl: 2rem;
+
+    --sx-focus-ring: 0 0 0 0.2rem rgba(13, 110, 253, 0.35);
+}
+
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
+h1 {
+    font-size: var(--sx-fs-2xl);
+}
+
+h2 {
+    font-size: var(--sx-fs-xl);
+}
+
 h1:focus {
     outline: none;
+}
+
+/* A single, visible focus style for every interactive element - keyboard
+   navigation always gets a clear ring, without the "focus flash on every
+   mouse click" that :focus (rather than :focus-visible) would give. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.upload-dropzone:focus-within {
+    outline: none;
+    box-shadow: var(--sx-focus-ring);
 }
 
 a, .btn-link {

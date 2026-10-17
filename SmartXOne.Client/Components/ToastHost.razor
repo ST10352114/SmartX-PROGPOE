@@ -1,0 +1,42 @@
+@* Single app-wide toast renderer - see ToastService for why this exists as
+   one shared component rather than one per feature. Mounted once in
+   MainLayout.razor so it's present on every page. *@
+@implements IDisposable
+@inject ToastService Toasts
+
+<div class="toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _visible)
+    {
+        <div class="toast-item toast-item--@toast.Level.ToString().ToLowerInvariant()">
+            <span>@toast.Text</span>
+            <button type="button" class="toast-item__close" aria-label="Dismiss notification" @onclick="() => Dismiss(toast.Id)">&times;</button>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly List<ToastMessage> _visible = [];
+
+    protected override void OnInitialized() => Toasts.OnShow += HandleShow;
+
+    private void HandleShow(ToastMessage toast)
+    {
+        _visible.Add(toast);
+        InvokeAsync(StateHasChanged);
+        _ = AutoDismissAsync(toast.Id);
+    }
+
+    private async Task AutoDismissAsync(int id)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        Dismiss(id);
+    }
+
+    private void Dismiss(int id)
+    {
+        _visible.RemoveAll(t => t.Id == id);
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Toasts.OnShow -= HandleShow;
+}
