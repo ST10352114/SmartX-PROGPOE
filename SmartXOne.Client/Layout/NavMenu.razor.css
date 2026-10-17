@@ -25,12 +25,8 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='white' class='bi bi-house-door-fill' viewBox='0 0 16 16'%3E%3Cpath d='M6.5 14.5v-3.505c0-.245.25-.495.5-.495h2c.25 0 .5.25.5.5v3.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5Z'/%3E%3C/svg%3E");
 }
 
-.bi-plus-square-fill-nav-menu {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='white' class='bi bi-plus-square-fill' viewBox='0 0 16 16'%3E%3Cpath d='M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2zm6.5 4.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3a.5.5 0 0 1 1 0z'/%3E%3C/svg%3E");
-}
-
-.bi-list-nested-nav-menu {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='white' class='bi bi-list-nested' viewBox='0 0 16 16'%3E%3Cpath fill-rule='evenodd' d='M4.5 11.5A.5.5 0 0 1 5 11h10a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm-2-4A.5.5 0 0 1 3 7h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm-2-4A.5.5 0 0 1 1 3h10a.5.5 0 0 1 0 1H1a.5.5 0 0 1-.5-.5z'/%3E%3C/svg%3E");
+.bi-hdd-network-nav-menu {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='white' viewBox='0 0 16 16'%3E%3Cpath d='M7 2H2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h5v2H4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h3v2h2v-2h3a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1H9V6h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H9V0H7z'/%3E%3C/svg%3E");
 }
 
 .nav-item {
@@ -46,13 +42,25 @@
         padding-bottom: 1rem;
     }
 
-    .nav-item ::deep a {
+    /* Menu labels are full feature names (two lines at this sidebar width,
+       not the template's short single-word labels), so they need to wrap
+       instead of the original fixed-height single-line layout. */
+    .nav-item ::deep a,
+    .nav-item ::deep .nav-link.disabled {
         color: #d7d7d7;
         border-radius: 4px;
-        height: 3rem;
+        min-height: 3rem;
         display: flex;
-        align-items: center;
-        line-height: 3rem;
+        align-items: flex-start;
+        padding: 0.6rem 0.5rem;
+        line-height: 1.25rem;
+        white-space: normal;
+    }
+
+    .nav-item ::deep a .bi,
+    .nav-item ::deep .nav-link.disabled .bi {
+        flex: 0 0 auto;
+        margin-top: 0.05rem;
     }
 
 .nav-item ::deep a.active {
@@ -63,6 +71,24 @@
 .nav-item ::deep a:hover {
     background-color: rgba(255,255,255,0.1);
     color: white;
+}
+
+/* Disabled feature placeholder (Network Topology): rendered as a <span>, not a link */
+.nav-item ::deep .nav-link.disabled {
+    color: #8a8a8a;
+    cursor: not-allowed;
+    flex-wrap: wrap;
+}
+
+.nav-item ::deep .nav-link.disabled .bi {
+    opacity: 0.45;
+}
+
+.nav-item ::deep .nav-link.disabled .badge {
+    font-size: 0.62rem;
+    font-weight: 600;
+    margin-top: 0.35rem;
+    margin-left: 2rem !important;
 }
 
 @media (min-width: 641px) {
