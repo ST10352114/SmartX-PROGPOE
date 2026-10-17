@@ -11,6 +11,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<SensorRepository>();
 
+// Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
+// Attachments are additionally capped per-file inside the upload endpoint itself
+// (SensorEndpoints.MaxAttachmentSizeBytes); this is just the server-wide backstop.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 25 * 1024 * 1024);
+
 // CORS: the Blazor WASM client is served from a different origin (port) during
 // development, so the browser needs the API to explicitly allow that origin.
 const string ClientCorsPolicy = "SmartXClient";
