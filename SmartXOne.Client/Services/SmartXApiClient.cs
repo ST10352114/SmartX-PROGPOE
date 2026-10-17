@@ -25,6 +25,9 @@ public sealed class SmartXApiClient(HttpClient http)
 
     private readonly HttpClient _http = http;
 
+    /// <summary>The gateway's base URL, for building a direct download/preview link to an attachment.</summary>
+    public Uri BaseAddress => _http.BaseAddress!;
+
     /// <summary>
     /// Phase 1 round-trip check: fetch the gateway identity/health payload.
     /// </summary>
@@ -56,19 +59,35 @@ public sealed class SmartXApiClient(HttpClient http)
             new ReadingPayload(value, unit),
             ct);
 
-    public async Task<ApiResult<SensorSummary>> UploadProfileAsync(string sensorId, IBrowserFile file, CancellationToken ct = default)
+    /// <param name="onProgress">
+    /// Invoked with cumulative bytes sent as the upload streams, via
+    /// <see cref="ProgressReportingStream"/> wrapping the browser file stream -
+    /// this reflects bytes HttpClient has actually written to the request, not a
+    /// simulated animation.
+    /// </param>
+    public async Task<ApiResult<SensorSummary>> UploadProfileAsync(
+        string sensorId, IBrowserFile file, Action<long>? onProgress = null, CancellationToken ct = default)
     {
         try
         {
             using var content = new MultipartFormDataContent();
             await using var fileStream = file.OpenReadStream(MaxProfileFileBytes, ct);
-            using var streamContent = new StreamContent(fileStream);
+            var progressStream = onProgress is null
+                ? fileStream
+                : new ProgressReportingStream(fileStream, onProgress);
+
+            using var streamContent = new StreamContent(progressStream);
             streamContent.Headers.ContentType = new MediaTypeHeaderValue(
                 string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType);
+            streamContent.Headers.ContentLength = file.Size;
             content.Add(streamContent, name: "file", fileName: file.Name);
 
             var response = await _http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/profile", content, ct);
             return await ToResultAsync<SensorSummary>(response, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return ApiResult<SensorSummary>.Fail("Upload cancelled.");
         }
         catch (Exception ex)
         {

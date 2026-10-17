@@ -98,27 +98,51 @@
         }
         else
         {
-            <div class="row g-2 align-items-end">
-                <div class="col-12 col-md-4">
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-12 col-md-6">
                     <label class="form-label">Sensor</label>
-                    <select class="form-select" @bind="_uploadSensorId">
+                    <select class="form-select" @bind="_uploadSensorId" disabled="@_uploading">
                         @foreach (var sensor in _sensors)
                         {
                             <option value="@sensor.SensorId">@sensor.SensorId@(sensor.DisplayName is null ? "" : $" ({sensor.DisplayName})")</option>
                         }
                     </select>
                 </div>
-                <div class="col-12 col-md-6">
-                    <label class="form-label">File (log / photo / config)</label>
-                    <InputFile OnChange="UploadProfileAsync" class="form-control" />
-                </div>
-                <div class="col-12 col-md-2">
+            </div>
+
+            <label class="upload-dropzone @(_dragging ? "upload-dropzone--active" : "") @(_uploading ? "upload-dropzone--busy" : "")"
+                   @ondragenter="@(() => _dragging = true)"
+                   @ondragleave="@(() => _dragging = false)"
+                   @ondragover:preventDefault="true">
+                <InputFile OnChange="UploadProfileAsync"
+                           @ondrop="@(() => _dragging = false)"
+                           disabled="@_uploading"
+                           class="upload-dropzone__input" />
+                <span class="upload-dropzone__icon" aria-hidden="true">&#128194;</span>
+                <span>
                     @if (_uploading)
                     {
-                        <span class="text-body-secondary"><em>Uploading&hellip;</em></span>
+                        <text>Uploading&hellip;</text>
                     }
+                    else
+                    {
+                        <text>Drag a file here, or click to browse</text>
+                    }
+                </span>
+                <span class="text-body-secondary small">Images (.png, .jpg), or .log / .txt / .json / .csv &mdash; up to 20&nbsp;MB</span>
+            </label>
+
+            @if (_uploading)
+            {
+                <div class="d-flex align-items-center gap-3 mt-3">
+                    <div class="progress flex-grow-1" role="progressbar" aria-valuenow="@_uploadPercent" aria-valuemin="0" aria-valuemax="100" style="height: 0.75rem;">
+                        <div class="progress-bar" style="width: @(_uploadPercent)%"></div>
+                    </div>
+                    <span class="text-body-secondary small" style="min-width: 3.5rem;">@_uploadPercent%</span>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="CancelUpload">Cancel</button>
                 </div>
-            </div>
+            }
+
             @if (_uploadMessage is not null)
             {
                 <div class="alert @(_uploadSuccess ? "alert-success" : "alert-danger") mt-3 py-2 mb-0">@_uploadMessage</div>
@@ -177,7 +201,19 @@
                                     }
                                 </td>
                                 <td>@FormatChange(sensor.LatestReading)</td>
-                                <td>@(sensor.ProfileFileName ?? "-")</td>
+                                <td>
+                                    @if (sensor.Attachment is { } attachment)
+                                    {
+                                        <a href="@DownloadUrl(sensor.SensorId)" target="_blank" rel="noopener" title="@attachment.OriginalFileName">
+                                            @Truncate(attachment.OriginalFileName, 18)
+                                        </a>
+                                        <span class="text-body-secondary d-block small">@FormatSize(attachment.SizeBytes)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-body-secondary">-</span>
+                                    }
+                                </td>
                                 <td>
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleHistoryAsync(sensor.SensorId)">
                                         @(_expandedSensorId == sensor.SensorId ? "Hide" : "Show")
@@ -243,6 +279,9 @@
     private bool _uploading;
     private bool _uploadSuccess;
     private string? _uploadMessage;
+    private int _uploadPercent;
+    private bool _dragging;
+    private CancellationTokenSource? _uploadCts;
 
     private string? _expandedSensorId;
     private bool _historyLoading;
@@ -359,10 +398,22 @@
         }
 
         _uploading = true;
+        _uploadPercent = 0;
         _uploadMessage = null;
+        _uploadCts = new CancellationTokenSource();
+
         try
         {
-            var result = await Api.UploadProfileAsync(_uploadSensorId, args.File);
+            var result = await Api.UploadProfileAsync(
+                _uploadSensorId,
+                args.File,
+                onProgress: bytesSent => InvokeAsync(() =>
+                {
+                    _uploadPercent = args.File.Size == 0 ? 100 : (int)(bytesSent * 100 / args.File.Size);
+                    StateHasChanged();
+                }),
+                _uploadCts.Token);
+
             _uploadSuccess = result.Success;
             _uploadMessage = result.Success ? $"Attached '{args.File.Name}' to '{_uploadSensorId}'." : result.Error;
 
@@ -374,8 +425,24 @@
         finally
         {
             _uploading = false;
+            _uploadCts?.Dispose();
+            _uploadCts = null;
         }
     }
+
+    private void CancelUpload() => _uploadCts?.Cancel();
+
+    private string DownloadUrl(string sensorId) => new Uri(Api.BaseAddress, $"api/sensors/{Uri.EscapeDataString(sensorId)}/profile").ToString();
+
+    private static string Truncate(string value, int maxLength)
+        => value.Length <= maxLength ? value : string.Concat(value.AsSpan(0, maxLength - 1), "…");
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024):0.#} MB",
+    };
 
     private async Task ToggleHistoryAsync(string sensorId)
     {
@@ -419,6 +486,7 @@
     {
         _disposed = true;
         _autoSimulateCts?.Cancel();
+        _uploadCts?.Cancel();
     }
 
     private sealed class RegisterSensorForm

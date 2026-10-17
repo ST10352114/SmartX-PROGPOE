@@ -2,6 +2,7 @@
 // https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
 
 using SmartXOne.Api.Sensors;
+using SmartXOne.Api.Uploads;
 using SmartXOne.Shared.Contracts;
 using SmartXOne.Shared.Demo;
 
@@ -10,6 +11,7 @@ using System.Reflection;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<SensorRepository>();
+builder.Services.AddSingleton<AttachmentEncryptionKeyProvider>();
 
 // Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
 // Attachments are additionally capped per-file inside the upload endpoint itself

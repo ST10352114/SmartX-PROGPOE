@@ -187,7 +187,7 @@ public sealed class SensorRepository
     }
 
     /// <returns><c>false</c> if no sensor is registered with <paramref name="sensorId"/>.</returns>
-    public bool SetProfileFile(string sensorId, string fileName)
+    public bool SetProfileFile(string sensorId, string storedFileName, AttachmentMetadata metadata)
     {
         lock (_gate)
         {
@@ -196,8 +196,27 @@ public sealed class SensorRepository
                 return false;
             }
 
-            record.ProfileFileName = fileName;
+            record.AttachmentStoredFileName = storedFileName;
+            record.Attachment = metadata;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// The sensor's attachment metadata plus the name of its encrypted file on
+    /// disk, for the download endpoint. <c>null</c> if the sensor isn't
+    /// registered or has no attachment yet.
+    /// </summary>
+    public (AttachmentMetadata Metadata, string StoredFileName)? GetAttachment(string sensorId)
+    {
+        lock (_gate)
+        {
+            if (!_sensors.TryGetValue(sensorId, out var record) || record.Attachment is null || record.AttachmentStoredFileName is null)
+            {
+                return null;
+            }
+
+            return (record.Attachment, record.AttachmentStoredFileName);
         }
     }
 

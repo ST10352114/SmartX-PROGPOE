@@ -44,11 +44,27 @@ public record TelemetryReadingDto(
     string FormattedValue,
     double? ChangeSinceLast);
 
+/// <param name="OriginalFileName">The name the file was uploaded with.</param>
+/// <param name="SizeBytes">Plaintext size in bytes.</param>
+/// <param name="ContentType">The file's extension-derived content type, e.g. <c>"image/png"</c>.</param>
+/// <param name="UploadedAt">When the attachment was received.</param>
+/// <param name="Sha256Hex">
+/// SHA-256 of the plaintext, computed while it was being encrypted
+/// (<c>EncryptedAttachmentCodec.EncryptToFileAsync</c>) - lets a caller verify a
+/// downloaded file's integrity end to end once the download has completed.
+/// </param>
+public record AttachmentMetadata(
+    string OriginalFileName,
+    long SizeBytes,
+    string ContentType,
+    DateTimeOffset UploadedAt,
+    string Sha256Hex);
+
 /// <summary>A registered sensor plus its most recent reading, if any has arrived yet.</summary>
 public record SensorSummary(
     string SensorId,
     string DeploymentNodeId,
     SensorCategory Category,
     string? DisplayName,
-    string? ProfileFileName,
+    AttachmentMetadata? Attachment,
     TelemetryReadingDto? LatestReading);

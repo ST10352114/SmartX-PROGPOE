@@ -20,7 +20,16 @@ public sealed class SensorRecord(string sensorId, string deploymentNodeId, Senso
 
     public string? DisplayName { get; } = displayName;
 
-    public string? ProfileFileName { get; set; }
+    /// <summary>
+    /// Name of the encrypted file on disk under the API's <c>data/</c> folder.
+    /// Internal only - never serialised back to a client, which only ever sees
+    /// <see cref="Attachment"/> and fetches content via the profile download
+    /// endpoint rather than a raw file path.
+    /// </summary>
+    public string? AttachmentStoredFileName { get; set; }
+
+    /// <summary>Client-facing metadata for the attached file, if one has been uploaded.</summary>
+    public AttachmentMetadata? Attachment { get; set; }
 
     /// <summary>Most recent reading, or <c>null</c> until the first one is submitted.</summary>
     public ITelemetryPacket? LatestReading { get; set; }
@@ -38,7 +47,7 @@ public sealed class SensorRecord(string sensorId, string deploymentNodeId, Senso
         DeploymentNodeId: DeploymentNodeId,
         Category: Category,
         DisplayName: DisplayName,
-        ProfileFileName: ProfileFileName,
+        Attachment: Attachment,
         LatestReading: LatestReading is null
             ? null
             : new TelemetryReadingDto(
