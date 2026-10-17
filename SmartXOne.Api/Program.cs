@@ -2,6 +2,7 @@
 // https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
 
 using SmartXOne.Api.Issues;
+using SmartXOne.Api.Realtime;
 using SmartXOne.Api.Sensors;
 using SmartXOne.Api.Uploads;
 using SmartXOne.Shared.Contracts;
@@ -14,6 +15,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<SensorRepository>();
 builder.Services.AddSingleton<AttachmentEncryptionKeyProvider>();
 builder.Services.AddSingleton<IssueRepository>();
+
+// Part 2 - Real-Time Command Stream: queue/registry/history are singletons so
+// both API request threads and the background consumer share the same state;
+// the background service is the queue's single reader.
+builder.Services.AddSingleton<TelemetryQueueService>();
+builder.Services.AddSingleton<DeviceRegistry>();
+builder.Services.AddSingleton<CommandHistory>();
+builder.Services.AddHostedService<TelemetryIngestionBackgroundService>();
 
 // Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
 // Attachments are additionally capped per-file inside the upload endpoint itself
@@ -64,6 +73,9 @@ app.MapSensorEndpoints();
 
 // --- Fix C: user-reported issues backing the dashboard's engagement feature ---
 app.MapIssueEndpoints();
+
+// --- Part 2: telemetry queue/priority-queue intake, device registry, command stream ---
+app.MapRealtimeEndpoints();
 
 
 var demo = SharedFeatureDemo.Run();
