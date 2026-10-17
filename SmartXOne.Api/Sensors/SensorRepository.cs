@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SmartXOne.Shared.Collections;
 using SmartXOne.Shared.Contracts;
 using SmartXOne.Shared.Deployment;
 using SmartXOne.Shared.Telemetry;
@@ -12,6 +13,9 @@ public enum RegisterSensorResult
     UnknownDeploymentNode,
     CategoryCapacityReached,
 }
+
+/// <summary>A reading was well-formed (right CLR type) but failed a data-quality rule - see <see cref="PacketValidation"/>.</summary>
+public sealed class ReadingRejectedException(string reason) : Exception(reason);
 
 /// <summary>
 /// In-memory store for registered sensors (requirement: "no EF/database" - this
@@ -30,9 +34,9 @@ public sealed class SensorRepository
     private readonly Lock _gate = new();
     private readonly DeploymentNode _deploymentRoot = DeploymentSeed.BuildRoot();
 
-    private readonly CategoryHistory<float> _environmentalHistory = new();
-    private readonly CategoryHistory<int> _powerHistory = new();
-    private readonly CategoryHistory<bool> _actuatorHistory = new();
+    private readonly CategoryHistory<float> _environmentalHistory = new(PacketValidation.Environmental);
+    private readonly CategoryHistory<int> _powerHistory = new(PacketValidation.Power);
+    private readonly CategoryHistory<bool> _actuatorHistory = new(PacketValidation.Actuator);
 
     public RegisterSensorResult Register(RegisterSensorRequest request)
     {
@@ -127,6 +131,11 @@ public sealed class SensorRepository
     /// </summary>
     /// <exception cref="KeyNotFoundException">No sensor registered with that id.</exception>
     /// <exception cref="JsonException"><paramref name="value"/> doesn't match the sensor's category.</exception>
+    /// <exception cref="ReadingRejectedException">
+    /// The value parsed fine but failed the category's data-quality rule (see
+    /// <see cref="PacketValidation"/>) - the reading's <c>IngestionBuffer</c>
+    /// entry is tagged <see cref="IngestionState.Rejected"/> rather than stored.
+    /// </exception>
     public TelemetryReadingDto SubmitReading(string sensorId, JsonElement value, string? unit)
     {
         SensorRecord record;
@@ -147,7 +156,12 @@ public sealed class SensorRepository
                 case SensorCategory.Environmental:
                 {
                     var packet = TelemetryPacket.Create(sensorId, value.GetSingle(), resolvedUnit);
-                    _environmentalHistory.Append(sensorId, packet);
+                    var entry = _environmentalHistory.Append(sensorId, packet);
+                    if (entry.State == IngestionState.Rejected)
+                    {
+                        throw new ReadingRejectedException(entry.RejectionReason!);
+                    }
+
                     record.ChangeSinceLast = ComputeChange(_environmentalHistory.GetSensorHistory(sensorId));
                     record.LatestReading = packet;
                     break;
@@ -156,7 +170,12 @@ public sealed class SensorRepository
                 case SensorCategory.PowerConsumption:
                 {
                     var packet = TelemetryPacket.Create(sensorId, value.GetInt32(), resolvedUnit);
-                    _powerHistory.Append(sensorId, packet);
+                    var entry = _powerHistory.Append(sensorId, packet);
+                    if (entry.State == IngestionState.Rejected)
+                    {
+                        throw new ReadingRejectedException(entry.RejectionReason!);
+                    }
+
                     record.ChangeSinceLast = ComputeChange(_powerHistory.GetSensorHistory(sensorId));
                     record.LatestReading = packet;
                     break;
@@ -166,6 +185,9 @@ public sealed class SensorRepository
                 {
                     // A bool state has no numeric delta - SensorReading.Value is a
                     // double, so there's nothing meaningful to subtract here.
+                    // (PacketValidation.Actuator never rejects, but Append is still
+                    // routed through the same Received/Validated/Stored pipeline as
+                    // the other two categories for consistency.)
                     var packet = TelemetryPacket.Create(sensorId, value.GetBoolean(), resolvedUnit);
                     _actuatorHistory.Append(sensorId, packet);
                     record.ChangeSinceLast = null;
@@ -183,6 +205,31 @@ public sealed class SensorRepository
                 record.LatestReading!.ValueType,
                 record.LatestReading!.FormatValue(),
                 record.ChangeSinceLast);
+        }
+    }
+
+    /// <summary>
+    /// This sensor's ingestion log (Fix B): every currently-Stored reading plus
+    /// its recent Rejected attempts, oldest first - see
+    /// <see cref="CategoryHistory{T}.GetIngestionLog"/>.
+    /// </summary>
+    /// <returns><c>null</c> if no sensor is registered with <paramref name="sensorId"/>.</returns>
+    public IReadOnlyList<IngestionLogEntryDto>? GetIngestionLog(string sensorId)
+    {
+        lock (_gate)
+        {
+            if (!_sensors.TryGetValue(sensorId, out var record))
+            {
+                return null;
+            }
+
+            return record.Category switch
+            {
+                SensorCategory.Environmental => _environmentalHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                SensorCategory.PowerConsumption => _powerHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                SensorCategory.Actuator => _actuatorHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                _ => [],
+            };
         }
     }
 
@@ -223,6 +270,15 @@ public sealed class SensorRepository
     private static TelemetryReadingDto ToDto<T>(TelemetryPacket<T> packet)
         where T : struct
         => new(packet.Unit, packet.Timestamp, packet.ValueType, packet.FormatValue(), ChangeSinceLast: null);
+
+    private static IngestionLogEntryDto ToLogDto<T>(IngestionEntry<T> entry)
+        where T : struct
+        => new(
+            entry.Packet.FormatValue(),
+            entry.Packet.ValueType,
+            entry.Packet.Timestamp,
+            entry.State.ToString(),
+            entry.RejectionReason);
 
     /// <summary>
     /// (PoE requirement 3b &ndash; OPERATOR OVERLOADING, applied) The delta

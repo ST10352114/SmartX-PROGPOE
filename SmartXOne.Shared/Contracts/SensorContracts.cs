@@ -60,6 +60,22 @@ public record AttachmentMetadata(
     DateTimeOffset UploadedAt,
     string Sha256Hex);
 
+/// <param name="FormattedValue">Culture-invariant string form of the payload (empty for a rejected reading with no stored packet to format against a scale that makes sense).</param>
+/// <param name="ValueType">CLR type name of the payload.</param>
+/// <param name="Timestamp">When the reading was taken.</param>
+/// <param name="State">
+/// Where this reading ended up: <c>"Stored"</c> (held in the device's
+/// <c>IngestionBuffer&lt;T&gt;</c>) or <c>"Rejected"</c> (failed
+/// <c>PacketValidation</c> and was logged with a reason instead).
+/// </param>
+/// <param name="RejectionReason"><c>null</c> unless <paramref name="State"/> is <c>"Rejected"</c>.</param>
+public record IngestionLogEntryDto(
+    string FormattedValue,
+    string ValueType,
+    DateTimeOffset Timestamp,
+    string State,
+    string? RejectionReason);
+
 /// <summary>A registered sensor plus its most recent reading, if any has arrived yet.</summary>
 public record SensorSummary(
     string SensorId,

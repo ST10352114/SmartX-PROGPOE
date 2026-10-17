@@ -54,6 +54,13 @@ public static class SensorEndpoints
                 return Results.BadRequest(
                     "Reading value doesn't match this sensor's category (expects a JSON number for Environmental/PowerConsumption, or a JSON boolean for Actuator).");
             }
+            catch (ReadingRejectedException ex)
+            {
+                // Parsed fine, but PacketValidation rejected it - the reading is
+                // still logged (GET .../ingestion-log) with this reason, just not
+                // stored as the sensor's latest reading.
+                return Results.BadRequest(ex.Message);
+            }
         });
 
         // 3. Retrieve every registered sensor with its latest reading.
@@ -64,6 +71,14 @@ public static class SensorEndpoints
         group.MapGet("/{sensorId}/history", (string sensorId, SensorRepository repo)
             => repo.GetHistory(sensorId) is { } history
                 ? Results.Ok(history)
+                : Results.NotFound($"No sensor registered with id '{sensorId}'."));
+
+        // 3c. Retrieve one sensor's ingestion log (Fix B - COLLECTIONS): every
+        // Stored reading plus recent Rejected attempts with their reason, as
+        // tracked by that device's IngestionBuffer<T>.
+        group.MapGet("/{sensorId}/ingestion-log", (string sensorId, SensorRepository repo)
+            => repo.GetIngestionLog(sensorId) is { } log
+                ? Results.Ok(log)
                 : Results.NotFound($"No sensor registered with id '{sensorId}'."));
 
         // 4. Attach a sensor profile file: streamed straight from the multipart
