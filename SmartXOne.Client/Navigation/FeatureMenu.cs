@@ -19,7 +19,7 @@ public record FeatureMenuItem(
 
 public static class FeatureMenu
 {
-    /// <summary>The three PoE features. Only the first is built in Part 1.</summary>
+    /// <summary>The three PoE features. The first two are built (Part 1, Part 2); the third is a placeholder for the final PoE submission.</summary>
     public static readonly IReadOnlyList<FeatureMenuItem> Items =
     [
         new FeatureMenuItem(
@@ -31,16 +31,16 @@ public static class FeatureMenu
 
         new FeatureMenuItem(
             Title: "Real-Time Command Stream and History",
-            Description: "Push commands to actuator nodes and replay the command/acknowledgement history.",
+            Description: "Live device telemetry, manual pump/relay/valve overrides with undo, and the command history behind them.",
             Href: "command-stream",
-            Enabled: false,
-            StatusLabel: "Coming in Part 2"),
+            Enabled: true,
+            StatusLabel: null),
 
         new FeatureMenuItem(
             Title: "Network Topology and Mesh Routing",
             Description: "Visualise the node mesh and compute routing paths between gateway and leaf nodes.",
             Href: "topology",
             Enabled: false,
-            StatusLabel: "Coming in Part 3"),
+            StatusLabel: "Coming in final PoE"),
     ];
 }

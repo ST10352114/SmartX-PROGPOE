@@ -1,0 +1,47 @@
+@* The "timeline graph" requirement: a plain inline-SVG line chart over one
+   device's SortedDictionary-backed timeline (DeviceRegistry.GetTimeline),
+   which arrives already time-ordered - no client-side sort needed. Kept
+   deliberately simple (min/max as text, no drawn axes) to stay legible at
+   card size. *@
+@using System.Globalization
+
+@if (Points.Count < 2)
+{
+    <p class="text-body-secondary small mb-0"><em>Not enough history yet for a timeline - keep telemetry flowing for this device.</em></p>
+}
+else
+{
+    <div class="timeline-chart">
+        <svg viewBox="0 0 200 56" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="@PolylinePoints()" />
+        </svg>
+        <div class="timeline-chart__labels">
+            <span>@Points[0].Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+            <span class="text-body-secondary">min @_min.ToString("0.#", CultureInfo.InvariantCulture) / max @_max.ToString("0.#", CultureInfo.InvariantCulture) @Points[0].Unit</span>
+            <span>@Points[^1].Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<TelemetryPointDto> Points { get; set; } = [];
+
+    private double _min;
+    private double _max;
+
+    private string PolylinePoints()
+    {
+        _min = Points.Min(p => p.Value);
+        _max = Points.Max(p => p.Value);
+        var range = Math.Max(0.0001, _max - _min);
+        var stepX = 200.0 / (Points.Count - 1);
+
+        return string.Join(' ', Points.Select((p, i) =>
+        {
+            var x = i * stepX;
+            var y = 52 - ((p.Value - _min) / range) * 48; // 56-tall viewBox, padding top/bottom
+            return $"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}";
+        }));
+    }
+}

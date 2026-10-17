@@ -1,0 +1,313 @@
+@page "/command-stream"
+@implements IDisposable
+@inject SmartXApiClient Api
+@inject CommandStreamState State
+@inject ToastService Toasts
+
+<PageTitle>Real-Time Command Stream and History</PageTitle>
+
+<h1>Real-Time Command Stream and History</h1>
+<p class="lead">
+    Live device telemetry straight off the queue, manual pump/relay/valve overrides with undo,
+    and the command history behind them.
+</p>
+
+@if (State.LoadError is not null)
+{
+    <div class="alert alert-warning d-flex justify-content-between align-items-center">
+        <span>
+            <strong>Could not reach the gateway.</strong> @State.LoadError
+            &mdash; showing the last data received; retrying automatically every few seconds.
+        </span>
+        <button class="btn btn-sm btn-outline-warning" @onclick="State.RefreshAsync">Retry now</button>
+    </div>
+}
+
+@if (!State.HasLoadedOnce)
+{
+    <div class="d-flex align-items-center gap-2 text-body-secondary mb-3">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        <span>Connecting to the command stream&hellip;</span>
+    </div>
+}
+else
+{
+    @if (State.QueueStatus is { } queueStatus)
+    {
+        <div class="queue-strip mb-3">
+            <span><strong>@queueStatus.StandardQueueDepth</strong> queued</span>
+            <span><strong>@queueStatus.PriorityQueueDepth</strong> priority-queued</span>
+            <span><strong>@queueStatus.ProcessedCount</strong> processed</span>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-4">
+                    <label class="form-label" for="deviceSearchInput">Search by device id</label>
+                    <input id="deviceSearchInput" class="form-control" @bind="_search" @bind:event="oninput" placeholder="e.g. ESP32" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label" for="categoryFilterSelect">Category</label>
+                    <select id="categoryFilterSelect" class="form-select" @bind="_categoryFilter">
+                        <option value="">All categories</option>
+                        <option value="EnvironmentalSensor">Moisture / environmental</option>
+                        <option value="SmartPlug">Power / smart plug</option>
+                        <option value="ActuatorNode">Actuator (pump / relay / valve)</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label" for="alertFilterSelect">Alert state</label>
+                    <select id="alertFilterSelect" class="form-select" @bind="_alertFilter">
+                        <option value="">All states</option>
+                        <option value="normal">Normal</option>
+                        <option value="elevated">Warning</option>
+                        <option value="critical">Critical</option>
+                        <option value="disconnected">Disconnected</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-2 d-flex gap-2">
+                    <button class="btn btn-outline-danger flex-fill" disabled="@_actionBusy" @onclick="ShutAllValvesAsync" title="Closes every device's valve">
+                        Shut all valves
+                    </button>
+                </div>
+            </div>
+            <div class="mt-2">
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(_actionBusy || State.RecentCommands.Count == 0)" @onclick="UndoAsync">
+                    &#8630; Undo last command
+                </button>
+                <span class="text-body-secondary small ms-2">
+                    @(State.RecentCommands.Count == 0 ? "Nothing to undo yet." : $"{State.RecentCommands.Count} command(s) in history.")
+                </span>
+            </div>
+        </div>
+    </div>
+
+    @if (FilteredDevices.Count == 0)
+    {
+        <p class="text-body-secondary"><em>@(State.Devices.Count == 0 ? "No devices yet - start the simulator or wait for traffic." : "No devices match the current search/filter.")</em></p>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            @foreach (var device in FilteredDevices)
+            {
+                <div class="col-12 col-md-6 col-xl-4">
+                    <div class="card h-100 device-card">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="fw-semibold">@device.Id</div>
+                                    <div class="text-body-secondary small">@KindLabel(device.Kind)</div>
+                                </div>
+                                <div class="text-end">
+                                    @if (device.IsDisconnected)
+                                    {
+                                        <span class="badge bg-secondary">Disconnected</span>
+                                    }
+                                    <span class="badge @SeverityBadgeClass(device.LastSeverity) d-block mt-1">@device.LastSeverity</span>
+                                </div>
+                            </div>
+
+                            <div class="mt-2">
+                                <span class="fs-5">@device.LastValue.ToString("0.#")@device.Unit</span>
+                                <span class="text-body-secondary small d-block">updated @device.LastSeen.ToLocalTime().ToString("HH:mm:ss")</span>
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                <button class="btn btn-sm @(device.State.PumpOn ? "btn-success" : "btn-outline-secondary")" disabled="@_actionBusy"
+                                        @onclick="() => IssueAsync(device.Id, device.State.PumpOn ? DeviceCommandType.PumpOff : DeviceCommandType.PumpOn)">
+                                    Pump @(device.State.PumpOn ? "ON" : "OFF")
+                                </button>
+                                <button class="btn btn-sm @(device.State.RelayOn ? "btn-success" : "btn-outline-secondary")" disabled="@_actionBusy"
+                                        @onclick="() => IssueAsync(device.Id, device.State.RelayOn ? DeviceCommandType.RelayOff : DeviceCommandType.RelayOn)">
+                                    Relay @(device.State.RelayOn ? "ON" : "OFF")
+                                </button>
+                                <span class="badge @(device.State.ValveOpen ? "bg-success" : "bg-secondary") align-self-center">
+                                    Valve @(device.State.ValveOpen ? "open" : "shut")
+                                </span>
+                            </div>
+
+                            <button class="btn btn-sm btn-link px-0 mt-2" @onclick="() => ToggleTimelineAsync(device.Id)">
+                                @(_expandedDeviceId == device.Id ? "Hide timeline" : "Show timeline")
+                            </button>
+
+                            @if (_expandedDeviceId == device.Id)
+                            {
+                                @if (_timelineLoading)
+                                {
+                                    <span class="spinner-border spinner-border-sm text-body-secondary" role="status" aria-hidden="true"></span>
+                                }
+                                else
+                                {
+                                    <DeviceTimelineChart Points="_timelinePoints" />
+                                }
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-header">Command history</div>
+        <div class="card-body">
+            @if (State.RecentCommands.Count == 0)
+            {
+                <p class="text-body-secondary mb-0"><em>No commands issued yet.</em></p>
+            }
+            else
+            {
+                <ul class="list-group list-group-flush">
+                    @foreach (var command in State.RecentCommands)
+                    {
+                        <li class="list-group-item d-flex justify-content-between">
+                            <span>
+                                <strong>@CommandLabel(command.Type)</strong>
+                                @(command.DeviceId is null ? $"({command.PreviousStates.Count} device(s))" : $"on {command.DeviceId}")
+                            </span>
+                            <span class="text-body-secondary small">@command.IssuedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private string _search = "";
+    private string _categoryFilter = "";
+    private string _alertFilter = "";
+    private string? _expandedDeviceId;
+    private List<TelemetryPointDto> _timelinePoints = [];
+    private bool _timelineLoading;
+    private bool _actionBusy;
+
+    private List<DeviceDto> FilteredDevices => State.Devices
+        .Where(d => string.IsNullOrWhiteSpace(_search) || d.Id.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        .Where(MatchesCategory)
+        .Where(MatchesAlertState)
+        .OrderBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    protected override void OnInitialized() => State.Changed += OnStateChanged;
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private bool MatchesCategory(DeviceDto device)
+        => string.IsNullOrEmpty(_categoryFilter) || device.Kind.ToString() == _categoryFilter;
+
+    private bool MatchesAlertState(DeviceDto device) => _alertFilter switch
+    {
+        "" => true,
+        "disconnected" => device.IsDisconnected,
+        "normal" => device.LastSeverity == AlertSeverity.Normal,
+        "elevated" => device.LastSeverity == AlertSeverity.Elevated,
+        "critical" => device.LastSeverity == AlertSeverity.Critical,
+        _ => true,
+    };
+
+    private async Task IssueAsync(string deviceId, DeviceCommandType type)
+    {
+        _actionBusy = true;
+        try
+        {
+            var result = await Api.IssueCommandAsync(deviceId, type);
+            Toasts.Show(
+                result.Success ? $"{deviceId}: {CommandLabel(type)} applied." : result.Error ?? "Command failed.",
+                result.Success ? ToastLevel.Success : ToastLevel.Danger);
+            await State.RefreshAsync();
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private async Task ShutAllValvesAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            var result = await Api.ShutAllValvesAsync();
+            Toasts.Show(result.Success ? "Shut all valves applied." : result.Error ?? "Failed to shut all valves.",
+                result.Success ? ToastLevel.Warning : ToastLevel.Danger);
+            await State.RefreshAsync();
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private async Task UndoAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            var result = await Api.UndoCommandAsync();
+            Toasts.Show(
+                result.Success
+                    ? $"Undid {CommandLabel(result.Value!.UndoneType)} - {result.Value.RestoredStates.Count} device(s) restored."
+                    : result.Error ?? "Nothing to undo.",
+                result.Success ? ToastLevel.Info : ToastLevel.Warning);
+            await State.RefreshAsync();
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private async Task ToggleTimelineAsync(string deviceId)
+    {
+        if (_expandedDeviceId == deviceId)
+        {
+            _expandedDeviceId = null;
+            _timelinePoints = [];
+            return;
+        }
+
+        _expandedDeviceId = deviceId;
+        _timelineLoading = true;
+        _timelinePoints = [];
+        try
+        {
+            _timelinePoints = await Api.GetDeviceTimelineAsync(deviceId);
+        }
+        finally
+        {
+            _timelineLoading = false;
+        }
+    }
+
+    private static string KindLabel(RealtimeDeviceKind kind) => kind switch
+    {
+        RealtimeDeviceKind.EnvironmentalSensor => "Environmental (moisture)",
+        RealtimeDeviceKind.SmartPlug => "Smart plug (power)",
+        RealtimeDeviceKind.ActuatorNode => "Actuator (pump / relay / valve)",
+        _ => kind.ToString(),
+    };
+
+    private static string CommandLabel(DeviceCommandType type) => type switch
+    {
+        DeviceCommandType.PumpOn => "Pump ON",
+        DeviceCommandType.PumpOff => "Pump OFF",
+        DeviceCommandType.RelayOn => "Relay ON",
+        DeviceCommandType.RelayOff => "Relay OFF",
+        DeviceCommandType.ShutAllValves => "Shut ALL valves",
+        _ => type.ToString(),
+    };
+
+    private static string SeverityBadgeClass(AlertSeverity severity) => severity switch
+    {
+        AlertSeverity.Critical => "bg-danger",
+        AlertSeverity.Elevated => "bg-warning text-dark",
+        _ => "bg-success",
+    };
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

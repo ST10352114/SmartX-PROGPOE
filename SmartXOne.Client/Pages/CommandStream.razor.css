@@ -1,0 +1,19 @@
+.queue-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sx-space-4, 1rem);
+    font-size: var(--sx-fs-sm, 0.8125rem);
+    color: var(--bs-secondary-color);
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--sx-radius-md, 0.5rem);
+    padding: var(--sx-space-2, 0.5rem) var(--sx-space-4, 1rem);
+}
+
+.queue-strip strong {
+    color: var(--bs-body-color);
+}
+
+.device-card {
+    border-radius: var(--sx-radius-md, 0.5rem);
+}
