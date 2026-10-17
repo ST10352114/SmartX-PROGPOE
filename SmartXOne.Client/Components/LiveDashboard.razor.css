@@ -1,0 +1,141 @@
+.kpi-card {
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+    padding: 0.85rem 1rem;
+    height: 100%;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.kpi-card__value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.kpi-card__label {
+    color: var(--bs-secondary-color);
+    font-size: 0.8rem;
+}
+
+.kpi-card--warn {
+    border-color: var(--bs-warning);
+    background: color-mix(in srgb, var(--bs-warning) 12%, var(--bs-tertiary-bg));
+}
+
+.kpi-card--danger {
+    border-color: var(--bs-danger);
+    background: color-mix(in srgb, var(--bs-danger) 12%, var(--bs-tertiary-bg));
+}
+
+.sensor-gauge-card {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+    padding: 0.85rem 1rem;
+    height: 100%;
+}
+
+.gauge {
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--bs-secondary-bg);
+    overflow: hidden;
+}
+
+.gauge__fill {
+    height: 100%;
+    border-radius: 999px;
+    /* Animated: a reading that moves the score updates this bar's width, and
+       the transition makes that change visibly glide rather than jump. */
+    transition: width 0.6s ease, background-color 0.3s ease;
+}
+
+.gauge__fill--ok {
+    background-color: var(--bs-success);
+}
+
+.gauge__fill--warning {
+    background-color: var(--bs-warning);
+}
+
+.gauge__fill--danger {
+    background-color: var(--bs-danger);
+}
+
+.sparkline {
+    width: 100%;
+    height: 1.5rem;
+    display: block;
+}
+
+.sparkline polyline {
+    fill: none;
+    stroke: var(--bs-primary);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.toast-stack {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 1080;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: min(22rem, calc(100vw - 2rem));
+}
+
+.toast-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.65rem 0.85rem;
+    border-radius: 0.5rem;
+    color: #fff;
+    font-size: 0.85rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.25);
+    animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(0.5rem);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.toast-item--alert {
+    background: var(--bs-danger);
+}
+
+.toast-item--watch {
+    background: var(--bs-warning);
+    color: #000;
+}
+
+.toast-item--nominal {
+    background: var(--bs-secondary);
+}
+
+.toast-item__close {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.8;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0;
+}
+
+.toast-item__close:hover {
+    opacity: 1;
+}

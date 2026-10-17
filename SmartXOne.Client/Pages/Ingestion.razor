@@ -8,6 +8,7 @@
 <h1>Sensor Data Ingestion and Telemetry</h1>
 <p class="lead">Register mesh sensors, ingest telemetry, attach files, and monitor live readings.</p>
 
+<LiveDashboard Sensors="_sensors" OpenIssueCount="_openIssueCount" />
 <AnomalySpotlightCard Sensors="_sensors" />
 
 <div class="row g-4">
@@ -151,6 +152,8 @@
     </div>
 </div>
 
+<IssuesPanel Sensors="_sensors" />
+
 <div class="card mt-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Registered sensors</span>
@@ -275,6 +278,9 @@
     private CancellationTokenSource? _autoSimulateCts;
     private bool _disposed;
 
+    private int _openIssueCount;
+    private CancellationTokenSource? _liveRefreshCts;
+
     private string? _uploadSensorId;
     private bool _uploading;
     private bool _uploadSuccess;
@@ -287,7 +293,13 @@
     private bool _historyLoading;
     private List<TelemetryReadingDto> _history = [];
 
-    protected override Task OnInitializedAsync() => RefreshSensorsAsync();
+    protected override Task OnInitializedAsync()
+    {
+        var cts = new CancellationTokenSource();
+        _liveRefreshCts = cts;
+        _ = LiveRefreshLoopAsync(cts.Token);
+        return RefreshSensorsAsync();
+    }
 
     private async Task RefreshSensorsAsync()
     {
@@ -296,10 +308,38 @@
         {
             _sensors = await Api.GetSensorsAsync();
             _uploadSensorId ??= _sensors.FirstOrDefault()?.SensorId;
+
+            var openIssues = await Api.GetIssuesAsync(status: IssueStatus.Open);
+            _openIssueCount = openIssues.Count;
         }
         catch (Exception ex)
         {
             _loadError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Keeps the dashboard live without a page reload, independently of the
+    /// "auto-generate telemetry" toggle below - this is the standing
+    /// auto-refresh the engagement feature needs to actually look alive.
+    /// </summary>
+    private async Task LiveRefreshLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(4));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await RefreshSensorsAsync();
+                if (!_disposed)
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page navigated away - expected.
         }
     }
 
@@ -487,6 +527,7 @@
         _disposed = true;
         _autoSimulateCts?.Cancel();
         _uploadCts?.Cancel();
+        _liveRefreshCts?.Cancel();
     }
 
     private sealed class RegisterSensorForm

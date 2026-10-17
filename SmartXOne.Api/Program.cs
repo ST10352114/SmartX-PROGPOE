@@ -1,6 +1,7 @@
 // Source attribution: Adapted from Telerik Blazor FAQ 
 // https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
 
+using SmartXOne.Api.Issues;
 using SmartXOne.Api.Sensors;
 using SmartXOne.Api.Uploads;
 using SmartXOne.Shared.Contracts;
@@ -12,6 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<SensorRepository>();
 builder.Services.AddSingleton<AttachmentEncryptionKeyProvider>();
+builder.Services.AddSingleton<IssueRepository>();
 
 // Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
 // Attachments are additionally capped per-file inside the upload endpoint itself
@@ -59,6 +61,9 @@ app.MapGet("/api/demo/oop", () => Results.Ok(SharedFeatureDemo.Run()));
 
 // --- Phase 4: sensor registration, telemetry submission, listing, profile upload ---
 app.MapSensorEndpoints();
+
+// --- Fix C: user-reported issues backing the dashboard's engagement feature ---
+app.MapIssueEndpoints();
 
 
 var demo = SharedFeatureDemo.Run();

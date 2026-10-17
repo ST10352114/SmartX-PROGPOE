@@ -135,5 +135,24 @@ public sealed class SmartXApiClient(HttpClient http)
         return ApiResult<T>.Fail(error ?? $"Request failed ({(int)response.StatusCode} {response.ReasonPhrase}).");
     }
 
+    public async Task<List<IssueDto>> GetIssuesAsync(IssueStatus? status = null, IssueSeverity? severity = null, CancellationToken ct = default)
+    {
+        var query = new List<string>();
+        if (status is { } s) query.Add($"status={s}");
+        if (severity is { } sev) query.Add($"severity={sev}");
+        var url = "api/issues" + (query.Count > 0 ? "?" + string.Join('&', query) : "");
+
+        return await _http.GetFromJsonAsync<List<IssueDto>>(url, ct) ?? [];
+    }
+
+    public Task<ApiResult<IssueDto>> CreateIssueAsync(CreateIssueRequest request, CancellationToken ct = default)
+        => PostForResultAsync<IssueDto>("api/issues", request, ct);
+
+    public Task<ApiResult<IssueDto>> AcknowledgeIssueAsync(string id, CancellationToken ct = default)
+        => PostForResultAsync<IssueDto>($"api/issues/{Uri.EscapeDataString(id)}/acknowledge", new { }, ct);
+
+    public Task<ApiResult<IssueDto>> ResolveIssueAsync(string id, CancellationToken ct = default)
+        => PostForResultAsync<IssueDto>($"api/issues/{Uri.EscapeDataString(id)}/resolve", new { }, ct);
+
     private sealed record ReadingPayload(object Value, string? Unit);
 }

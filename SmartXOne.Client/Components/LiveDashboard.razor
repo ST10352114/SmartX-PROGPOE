@@ -1,0 +1,193 @@
+@* Dynamic engagement feature (Fix C): KPI row, a live severity/gauge/sparkline
+   card per sensor, and toast alerts the moment a sensor crosses into the
+   Alert band - all driven purely by the Sensors parameter the parent page
+   refreshes on a timer, so this component just reacts; it owns no polling
+   of its own except fetching a changed sensor's sparkline history. *@
+@using System.Globalization
+@inject SmartXApiClient Api
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="kpi-card">
+            <div class="kpi-card__value">@Sensors.Count</div>
+            <div class="kpi-card__label">Active devices</div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="kpi-card">
+            <div class="kpi-card__value">@_packetsPerMinute</div>
+            <div class="kpi-card__label">Packets / min</div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="kpi-card @(OpenIssueCount > 0 ? "kpi-card--warn" : "")">
+            <div class="kpi-card__value">@OpenIssueCount</div>
+            <div class="kpi-card__label">Open issues</div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="kpi-card @(_alertCount > 0 ? "kpi-card--danger" : "")">
+            <div class="kpi-card__value">@_alertCount</div>
+            <div class="kpi-card__label">Active alerts</div>
+        </div>
+    </div>
+</div>
+
+@if (_assessments.Count > 0)
+{
+    <div class="row g-3 mb-3">
+        @foreach (var assessment in _assessments)
+        {
+            <div class="col-12 col-md-6 col-xl-4">
+                <div class="sensor-gauge-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">@assessment.Sensor.SensorId</div>
+                            <div class="text-body-secondary small">@assessment.Sensor.Category</div>
+                        </div>
+                        <span class="badge @SeverityBadgeClass(assessment.Severity)">@assessment.Severity</span>
+                    </div>
+
+                    <div class="gauge mt-2" role="progressbar" aria-label="deviation" aria-valuenow="@((int)(assessment.Score * 100))" aria-valuemin="0" aria-valuemax="100">
+                        <div class="gauge__fill @SeverityBarClass(assessment.Severity)" style="width: @((int)(assessment.Score * 100))%"></div>
+                    </div>
+
+                    @if (_sparklineCache.TryGetValue(assessment.Sensor.SensorId, out var points) && points.Count >= 2)
+                    {
+                        <svg class="sparkline mt-2" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+                            <polyline points="@SparklinePoints(points)" />
+                        </svg>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<div class="toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="toast-item toast-item--@toast.Severity.ToString().ToLowerInvariant()">
+            <span>@toast.Message</span>
+            <button type="button" class="toast-item__close" aria-label="Dismiss" @onclick="() => DismissToast(toast.Id)">&times;</button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SensorSummary> Sensors { get; set; } = [];
+
+    [Parameter]
+    public int OpenIssueCount { get; set; }
+
+    private List<AnomalyAssessment> _assessments = [];
+    private int _alertCount;
+    private int _packetsPerMinute;
+
+    private readonly Dictionary<string, DateTimeOffset> _lastSeenTimestamp = [];
+    private readonly List<DateTimeOffset> _recentReadingTimestamps = [];
+    private readonly Dictionary<string, List<float>> _sparklineCache = [];
+    private readonly Dictionary<string, AnomalySeverity> _previousSeverity = [];
+    private readonly List<ToastMessage> _toasts = [];
+    private int _toastSeq;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var changedSensorIds = new List<string>();
+
+        foreach (var sensor in Sensors)
+        {
+            if (sensor.LatestReading is not { } reading)
+            {
+                continue;
+            }
+
+            if (_lastSeenTimestamp.TryGetValue(sensor.SensorId, out var last) && last == reading.Timestamp)
+            {
+                continue; // nothing new for this sensor since the last tick
+            }
+
+            _lastSeenTimestamp[sensor.SensorId] = reading.Timestamp;
+            _recentReadingTimestamps.Add(now);
+            changedSensorIds.Add(sensor.SensorId);
+        }
+
+        _recentReadingTimestamps.RemoveAll(t => now - t > TimeSpan.FromMinutes(1));
+        _packetsPerMinute = _recentReadingTimestamps.Count;
+
+        _assessments = AnomalyScorer.AssessAll(Sensors).ToList();
+        _alertCount = _assessments.Count(a => a.Severity == AnomalySeverity.Alert);
+        DetectNewAlerts();
+
+        // Only re-fetch a sensor's sparkline history when its reading actually
+        // changed - keeps this from issuing N history calls every tick for
+        // sensors that haven't produced anything new.
+        foreach (var sensorId in changedSensorIds)
+        {
+            var history = await Api.GetSensorHistoryAsync(sensorId);
+            _sparklineCache[sensorId] = history
+                .Select(h => float.TryParse(h.FormattedValue, CultureInfo.InvariantCulture, out var v) ? v : 0f)
+                .TakeLast(12)
+                .ToList();
+        }
+    }
+
+    private void DetectNewAlerts()
+    {
+        foreach (var assessment in _assessments)
+        {
+            _previousSeverity.TryGetValue(assessment.Sensor.SensorId, out var previous);
+
+            if (assessment.Severity == AnomalySeverity.Alert && previous != AnomalySeverity.Alert)
+            {
+                var toast = new ToastMessage(++_toastSeq, $"{assessment.Sensor.SensorId}: {assessment.Explanation}", assessment.Severity);
+                _toasts.Add(toast);
+                _ = AutoDismissAsync(toast.Id);
+            }
+
+            _previousSeverity[assessment.Sensor.SensorId] = assessment.Severity;
+        }
+    }
+
+    private async Task AutoDismissAsync(int toastId)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        _toasts.RemoveAll(t => t.Id == toastId);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void DismissToast(int toastId) => _toasts.RemoveAll(t => t.Id == toastId);
+
+    private static string SparklinePoints(List<float> values)
+    {
+        var min = values.Min();
+        var max = values.Max();
+        var range = Math.Max(0.0001f, max - min);
+        var stepX = 100.0 / (values.Count - 1);
+
+        return string.Join(' ', values.Select((v, i) =>
+        {
+            var x = i * stepX;
+            var y = 22 - ((v - min) / range) * 20; // 24-tall viewBox, 2px padding top/bottom
+            return $"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}";
+        }));
+    }
+
+    private static string SeverityBadgeClass(AnomalySeverity severity) => severity switch
+    {
+        AnomalySeverity.Alert => "bg-danger",
+        AnomalySeverity.Watch => "bg-warning text-dark",
+        _ => "bg-success",
+    };
+
+    private static string SeverityBarClass(AnomalySeverity severity) => severity switch
+    {
+        AnomalySeverity.Alert => "gauge__fill--danger",
+        AnomalySeverity.Watch => "gauge__fill--warning",
+        _ => "gauge__fill--ok",
+    };
+
+    private sealed record ToastMessage(int Id, string Message, AnomalySeverity Severity);
+}

@@ -1,0 +1,208 @@
+@* User-reported issues list (Fix C, second half): add / acknowledge / resolve,
+   filtered by severity and status. Manages its own data independently of the
+   live dashboard above it - refreshes itself after every mutating action. *@
+@using System.ComponentModel.DataAnnotations
+@inject SmartXApiClient Api
+
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>Reported issues</span>
+        <div class="d-flex gap-2">
+            <select class="form-select form-select-sm" style="width: auto;" @bind="_filterSeverity" @bind:after="RefreshAsync">
+                <option value="">All severities</option>
+                @foreach (var s in Enum.GetValues<IssueSeverity>())
+                {
+                    <option value="@s">@s</option>
+                }
+            </select>
+            <select class="form-select form-select-sm" style="width: auto;" @bind="_filterStatus" @bind:after="RefreshAsync">
+                <option value="">All statuses</option>
+                @foreach (var s in Enum.GetValues<IssueStatus>())
+                {
+                    <option value="@s">@s</option>
+                }
+            </select>
+        </div>
+    </div>
+    <div class="card-body">
+        <EditForm Model="_newIssue" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-5">
+                    <label class="form-label">Description</label>
+                    <InputText class="form-control" @bind-Value="_newIssue.Description" placeholder="e.g. Moisture sensor reads flat for 10 minutes" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label">Sensor (optional)</label>
+                    <select class="form-select" @bind="_newIssue.SensorId">
+                        <option value="">-</option>
+                        @foreach (var sensor in Sensors)
+                        {
+                            <option value="@sensor.SensorId">@sensor.SensorId</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Severity</label>
+                    <InputSelect class="form-select" @bind-Value="_newIssue.Severity">
+                        @foreach (var s in Enum.GetValues<IssueSeverity>())
+                        {
+                            <option value="@s">@s</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="col-12 col-md-2">
+                    <button class="btn btn-primary w-100" type="submit" disabled="@_submitting">
+                        @(_submitting ? "Reporting..." : "Report")
+                    </button>
+                </div>
+            </div>
+        </EditForm>
+
+        @if (_submitError is not null)
+        {
+            <div class="alert alert-danger py-2 mt-2 mb-0">@_submitError</div>
+        }
+
+        <hr />
+
+        @if (_loading)
+        {
+            <p class="text-body-secondary mb-0"><em>Loading&hellip;</em></p>
+        }
+        else if (_issues.Count == 0)
+        {
+            <p class="text-body-secondary mb-0"><em>No issues match the current filter.</em></p>
+        }
+        else
+        {
+            <ul class="list-group list-group-flush">
+                @foreach (var issue in _issues)
+                {
+                    <li class="list-group-item d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                        <div>
+                            <span class="badge @SeverityClass(issue.Severity) me-1">@issue.Severity</span>
+                            <span class="badge @StatusClass(issue.Status) me-1">@issue.Status</span>
+                            @issue.Description
+                            <span class="text-body-secondary d-block small">
+                                @(issue.SensorId is null ? "" : $"Sensor {issue.SensorId} · ")@issue.CreatedAt.ToLocalTime().ToString("g")
+                            </span>
+                        </div>
+                        <div class="d-flex gap-1 flex-shrink-0">
+                            @if (issue.Status == IssueStatus.Open)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => AcknowledgeAsync(issue.Id)">Acknowledge</button>
+                            }
+                            @if (issue.Status != IssueStatus.Resolved)
+                            {
+                                <button class="btn btn-sm btn-outline-success" @onclick="() => ResolveAsync(issue.Id)">Resolve</button>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SensorSummary> Sensors { get; set; } = [];
+
+    private readonly NewIssueForm _newIssue = new();
+    private List<IssueDto> _issues = [];
+    private string _filterSeverity = "";
+    private string _filterStatus = "";
+    private bool _loading;
+    private bool _submitting;
+    private string? _submitError;
+
+    protected override Task OnInitializedAsync() => RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        _loading = true;
+        try
+        {
+            IssueSeverity? severity = Enum.TryParse<IssueSeverity>(_filterSeverity, out var sev) ? sev : null;
+            IssueStatus? status = Enum.TryParse<IssueStatus>(_filterStatus, out var stat) ? stat : null;
+            _issues = await Api.GetIssuesAsync(status, severity);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _submitting = true;
+        _submitError = null;
+        try
+        {
+            var request = new CreateIssueRequest(
+                string.IsNullOrWhiteSpace(_newIssue.SensorId) ? null : _newIssue.SensorId,
+                _newIssue.Description.Trim(),
+                _newIssue.Severity);
+
+            var result = await Api.CreateIssueAsync(request);
+            if (result.Success)
+            {
+                _newIssue.Reset();
+                await RefreshAsync();
+            }
+            else
+            {
+                _submitError = result.Error;
+            }
+        }
+        finally
+        {
+            _submitting = false;
+        }
+    }
+
+    private async Task AcknowledgeAsync(string id)
+    {
+        await Api.AcknowledgeIssueAsync(id);
+        await RefreshAsync();
+    }
+
+    private async Task ResolveAsync(string id)
+    {
+        await Api.ResolveIssueAsync(id);
+        await RefreshAsync();
+    }
+
+    private static string SeverityClass(IssueSeverity severity) => severity switch
+    {
+        IssueSeverity.Critical => "bg-danger",
+        IssueSeverity.High => "bg-warning text-dark",
+        IssueSeverity.Medium => "bg-info text-dark",
+        _ => "bg-secondary",
+    };
+
+    private static string StatusClass(IssueStatus status) => status switch
+    {
+        IssueStatus.Open => "bg-primary",
+        IssueStatus.Acknowledged => "bg-warning text-dark",
+        _ => "bg-success",
+    };
+
+    private sealed class NewIssueForm
+    {
+        [Required, MinLength(3)]
+        public string Description { get; set; } = "";
+
+        public string? SensorId { get; set; }
+
+        public IssueSeverity Severity { get; set; } = IssueSeverity.Medium;
+
+        public void Reset()
+        {
+            Description = "";
+            SensorId = null;
+            Severity = IssueSeverity.Medium;
+        }
+    }
+}

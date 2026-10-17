@@ -27,24 +27,11 @@ public static class AnomalyScorer
     private static readonly (float Min, float Max) PowerBand = (200f, 1200f);      // W
 
     /// <returns>The sensor with the highest deviation score, or <c>null</c> if none has a reading yet.</returns>
-    public static AnomalyAssessment? FindSpotlight(IEnumerable<SensorSummary> sensors)
-    {
-        AnomalyAssessment? worst = null;
-        foreach (var sensor in sensors)
-        {
-            if (Assess(sensor) is not { } assessment)
-            {
-                continue;
-            }
+    public static AnomalyAssessment? FindSpotlight(IEnumerable<SensorSummary> sensors) => AssessAll(sensors).FirstOrDefault();
 
-            if (worst is null || assessment.Score > worst.Score)
-            {
-                worst = assessment;
-            }
-        }
-
-        return worst;
-    }
+    /// <summary>Every sensor with a reading, worst (highest score) first - drives the live dashboard's per-sensor gauges and alert count.</summary>
+    public static IReadOnlyList<AnomalyAssessment> AssessAll(IEnumerable<SensorSummary> sensors)
+        => sensors.Select(Assess).OfType<AnomalyAssessment>().OrderByDescending(a => a.Score).ToList();
 
     private static AnomalyAssessment? Assess(SensorSummary sensor)
     {
