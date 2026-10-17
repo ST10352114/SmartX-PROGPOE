@@ -20,5 +20,6 @@ var apiBaseUrl = builder.Configuration["ApiBaseUrl"]
 builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(apiBaseUrl) });
 builder.Services.AddScoped<SmartXApiClient>();
 builder.Services.AddScoped<ToastService>();
+builder.Services.AddScoped<CommandStreamState>();
 
 await builder.Build().RunAsync();

@@ -154,5 +154,32 @@ public sealed class SmartXApiClient(HttpClient http)
     public Task<ApiResult<IssueDto>> ResolveIssueAsync(string id, CancellationToken ct = default)
         => PostForResultAsync<IssueDto>($"api/issues/{Uri.EscapeDataString(id)}/resolve", new { }, ct);
 
+    // --- Part 2: Real-Time Command Stream ---------------------------------
+
+    public async Task<List<DeviceDto>> GetRealtimeDevicesAsync(CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<List<DeviceDto>>("api/realtime/devices", ct) ?? [];
+
+    public async Task<List<TelemetryPointDto>> GetDeviceTimelineAsync(string deviceId, CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<List<TelemetryPointDto>>(
+            $"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/timeline", ct) ?? [];
+
+    public async Task<List<DeviceCommandDto>> GetRecentCommandsAsync(CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<List<DeviceCommandDto>>("api/realtime/commands", ct) ?? [];
+
+    public async Task<QueueStatusDto?> GetQueueStatusAsync(CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<QueueStatusDto>("api/realtime/queue-status", ct);
+
+    public Task<ApiResult<DeviceDto>> IssueCommandAsync(string deviceId, DeviceCommandType type, CancellationToken ct = default)
+        => PostForResultAsync<DeviceDto>($"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/commands", new IssueCommandRequest(type), ct);
+
+    public Task<ApiResult<object>> ShutAllValvesAsync(CancellationToken ct = default)
+        => PostForResultAsync<object>("api/realtime/commands/shut-all-valves", new { }, ct);
+
+    public Task<ApiResult<UndoResultDto>> UndoCommandAsync(CancellationToken ct = default)
+        => PostForResultAsync<UndoResultDto>("api/realtime/commands/undo", new { }, ct);
+
+    public Task<ApiResult<object>> DisconnectDeviceAsync(string deviceId, CancellationToken ct = default)
+        => PostForResultAsync<object>($"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/disconnect", new { }, ct);
+
     private sealed record ReadingPayload(object Value, string? Unit);
 }
