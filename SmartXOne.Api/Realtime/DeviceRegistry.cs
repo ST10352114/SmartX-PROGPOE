@@ -33,11 +33,13 @@ public sealed class DeviceRegistry
     private const int MaxTimelinePointsPerDevice = 100;
 
     /// <summary>Applies a dequeued reading: updates the device, appends to its timeline, and clears any disconnect flag (receiving telemetry means it's alive).</summary>
-    internal void ApplyTelemetry(TelemetryEnvelope envelope)
+    /// <returns><c>true</c> if this reading just pushed the device into AlertSeverity.Critical from a non-Critical state - the signal the recommendation engine logs as a "condition" event.</returns>
+    internal bool ApplyTelemetry(TelemetryEnvelope envelope)
     {
         lock (_gate)
         {
             var device = GetOrCreate(envelope.DeviceId, envelope.DeviceKind);
+            var wasCritical = device.LastSeverity == AlertSeverity.Critical;
             device.LastValue = envelope.Value;
             device.Unit = envelope.Unit;
             device.LastSeen = envelope.Timestamp;
@@ -51,6 +53,8 @@ public sealed class DeviceRegistry
             }
 
             _disconnectedDeviceIds.Remove(envelope.DeviceId);
+
+            return !wasCritical && envelope.Severity == AlertSeverity.Critical;
         }
     }
 

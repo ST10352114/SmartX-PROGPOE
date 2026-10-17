@@ -1,3 +1,4 @@
+using SmartXOne.Api.Recommendations;
 using SmartXOne.Shared.Contracts;
 
 namespace SmartXOne.Api.Realtime;
@@ -40,8 +41,10 @@ public static class RealtimeEndpoints
                 : Results.NotFound($"No device with id '{id}'."));
 
         // 3. Disconnect signal - HashSet dedup means a second signal for an
-        // already-disconnected device is just ignored, not a new alert.
-        group.MapPost("/devices/{id}/disconnect", (string id, DeviceRegistry registry) =>
+        // already-disconnected device is just ignored, not a new alert (and
+        // not logged as a fresh "condition" event for the recommendation
+        // engine either).
+        group.MapPost("/devices/{id}/disconnect", (string id, DeviceRegistry registry, RecommendationEngine recommendations) =>
         {
             if (registry.Get(id) is null)
             {
@@ -49,11 +52,16 @@ public static class RealtimeEndpoints
             }
 
             var isNewDisconnect = registry.MarkDisconnected(id);
+            if (isNewDisconnect)
+            {
+                recommendations.LogConditionDisconnected(id);
+            }
+
             return Results.Ok(new { deviceId = id, isNewDisconnect });
         });
 
         // 4. Single-device commands (pump / relay).
-        group.MapPost("/devices/{id}/commands", (string id, IssueCommandRequest request, DeviceRegistry registry, CommandHistory history) =>
+        group.MapPost("/devices/{id}/commands", (string id, IssueCommandRequest request, DeviceRegistry registry, CommandHistory history, RecommendationEngine recommendations) =>
         {
             if (request.Type == DeviceCommandType.ShutAllValves)
             {
@@ -62,15 +70,17 @@ public static class RealtimeEndpoints
 
             var previousState = registry.ApplySingleDeviceCommand(id, request.Type);
             history.Push(new DeviceCommandDto(id, request.Type, DateTimeOffset.UtcNow, new Dictionary<string, DeviceStateDto> { [id] = previousState }));
+            recommendations.LogCommand(id, request.Type);
 
             return Results.Ok(registry.Get(id));
         });
 
         // 5. System-wide command: shut every device's valve.
-        group.MapPost("/commands/shut-all-valves", (DeviceRegistry registry, CommandHistory history) =>
+        group.MapPost("/commands/shut-all-valves", (DeviceRegistry registry, CommandHistory history, RecommendationEngine recommendations) =>
         {
             var previousStates = registry.ShutAllValves();
             history.Push(new DeviceCommandDto(DeviceId: null, DeviceCommandType.ShutAllValves, DateTimeOffset.UtcNow, previousStates));
+            recommendations.LogCommand(deviceId: null, DeviceCommandType.ShutAllValves);
             return Results.Ok(new { affectedDevices = previousStates.Count });
         });
 

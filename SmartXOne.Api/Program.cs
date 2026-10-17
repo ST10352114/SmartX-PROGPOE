@@ -3,6 +3,7 @@
 
 using SmartXOne.Api.Issues;
 using SmartXOne.Api.Realtime;
+using SmartXOne.Api.Recommendations;
 using SmartXOne.Api.Sensors;
 using SmartXOne.Api.Uploads;
 using SmartXOne.Shared.Contracts;
@@ -23,6 +24,10 @@ builder.Services.AddSingleton<TelemetryQueueService>();
 builder.Services.AddSingleton<DeviceRegistry>();
 builder.Services.AddSingleton<CommandHistory>();
 builder.Services.AddHostedService<TelemetryIngestionBackgroundService>();
+
+// Part 2 - Predictive Action & Recommendation Engine: reads live state from
+// DeviceRegistry, so it's registered after it.
+builder.Services.AddSingleton<RecommendationEngine>();
 
 // Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
 // Attachments are additionally capped per-file inside the upload endpoint itself
@@ -76,6 +81,9 @@ app.MapIssueEndpoints();
 
 // --- Part 2: telemetry queue/priority-queue intake, device registry, command stream ---
 app.MapRealtimeEndpoints();
+
+// --- Part 2: predictive action / recommendation engine ---
+app.MapRecommendationEndpoints();
 
 
 var demo = SharedFeatureDemo.Run();

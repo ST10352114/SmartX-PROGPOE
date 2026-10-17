@@ -1,3 +1,4 @@
+using SmartXOne.Api.Recommendations;
 using SmartXOne.Shared.Contracts;
 
 namespace SmartXOne.Api.Realtime;
@@ -15,6 +16,7 @@ namespace SmartXOne.Api.Realtime;
 public sealed class TelemetryIngestionBackgroundService(
     TelemetryQueueService queue,
     DeviceRegistry registry,
+    RecommendationEngine recommendations,
     ILogger<TelemetryIngestionBackgroundService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -33,13 +35,21 @@ public sealed class TelemetryIngestionBackgroundService(
                 break; // host is shutting down
             }
 
-            registry.ApplyTelemetry(envelope);
+            var becameCritical = registry.ApplyTelemetry(envelope);
 
             if (envelope.Severity == AlertSeverity.Critical)
             {
                 logger.LogWarning(
                     "CRITICAL telemetry from {DeviceId}: {Value}{Unit} (processed ahead of the standard queue)",
                     envelope.DeviceId, envelope.Value, envelope.Unit);
+            }
+
+            // Only the transition INTO Critical is logged as a "condition" event
+            // for the recommendation engine - not every subsequent Critical
+            // reading, or one ongoing spike would dominate the event log.
+            if (becameCritical)
+            {
+                recommendations.LogConditionCritical(envelope.DeviceId);
             }
         }
 
