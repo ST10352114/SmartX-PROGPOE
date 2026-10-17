@@ -41,12 +41,42 @@ else
         </div>
     }
 
+    @if (State.Suggestions.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Suggested Actions &amp; Automated Insights</div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    @foreach (var suggestion in State.Suggestions)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                            <div>
+                                <span class="badge @(suggestion.Kind == SuggestionKind.Rule ? "bg-danger" : "bg-info text-dark") me-2">
+                                    @(suggestion.Kind == SuggestionKind.Rule ? "Insight" : "Suggestion")
+                                </span>
+                                <strong>@suggestion.Title</strong>
+                                <span class="text-body-secondary d-block small">@suggestion.Detail</span>
+                            </div>
+                            @if (suggestion.ExecutableDeviceId is { } execDeviceId && suggestion.ExecutableCommand is { } execCommand)
+                            {
+                                <button class="btn btn-sm btn-primary flex-shrink-0" disabled="@_actionBusy"
+                                        @onclick="() => IssueAsync(execDeviceId, execCommand)">
+                                    Execute: @CommandLabel(execCommand)
+                                </button>
+                            }
+                        </li>
+                    }
+                </ul>
+            </div>
+        </div>
+    }
+
     <div class="card mb-3">
         <div class="card-body">
             <div class="row g-2 align-items-end">
                 <div class="col-12 col-md-4">
                     <label class="form-label" for="deviceSearchInput">Search by device id</label>
-                    <input id="deviceSearchInput" class="form-control" @bind="_search" @bind:event="oninput" placeholder="e.g. ESP32" />
+                    <input id="deviceSearchInput" class="form-control" @bind="_search" @bind:event="oninput" @bind:after="OnSearchChanged" placeholder="e.g. ESP32" />
                 </div>
                 <div class="col-6 col-md-3">
                     <label class="form-label" for="categoryFilterSelect">Category</label>
@@ -185,6 +215,7 @@ else
     private List<TelemetryPointDto> _timelinePoints = [];
     private bool _timelineLoading;
     private bool _actionBusy;
+    private CancellationTokenSource? _searchLogCts;
 
     private List<DeviceDto> FilteredDevices => State.Devices
         .Where(d => string.IsNullOrWhiteSpace(_search) || d.Id.Contains(_search, StringComparison.OrdinalIgnoreCase))
@@ -209,6 +240,32 @@ else
         "critical" => device.LastSeverity == AlertSeverity.Critical,
         _ => true,
     };
+
+    /// <summary>
+    /// Debounced: logs a "search" event for the recommendation engine only
+    /// once typing settles (800ms of quiet), not on every keystroke - one
+    /// event per actual search, not one per character.
+    /// </summary>
+    private async Task OnSearchChanged()
+    {
+        _searchLogCts?.Cancel();
+        if (string.IsNullOrWhiteSpace(_search))
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _searchLogCts = cts;
+        try
+        {
+            await Task.Delay(800, cts.Token);
+            await Api.LogSearchAsync(_search, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer keystroke - expected.
+        }
+    }
 
     private async Task IssueAsync(string deviceId, DeviceCommandType type)
     {
@@ -309,5 +366,9 @@ else
         _ => "bg-success",
     };
 
-    public void Dispose() => State.Changed -= OnStateChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        _searchLogCts?.Cancel();
+    }
 }

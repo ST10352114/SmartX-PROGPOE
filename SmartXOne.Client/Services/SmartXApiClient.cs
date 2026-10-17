@@ -181,5 +181,30 @@ public sealed class SmartXApiClient(HttpClient http)
     public Task<ApiResult<object>> DisconnectDeviceAsync(string deviceId, CancellationToken ct = default)
         => PostForResultAsync<object>($"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/disconnect", new { }, ct);
 
+    // --- Part 2: Predictive Action / Recommendation Engine ----------------
+
+    public async Task<List<SuggestionDto>> GetSuggestionsAsync(CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<List<SuggestionDto>>("api/recommendations/suggestions", ct) ?? [];
+
+    /// <summary>
+    /// Call this debounced (not on every keystroke) - each call is one "search"
+    /// event logged for the recommendation engine. Fire-and-forget by design
+    /// (the endpoint returns 202 with no body, and a failed log shouldn't
+    /// interrupt the UI), so this doesn't go through PostForResultAsync/
+    /// ApiResult&lt;T&gt; like the rest of this class - there's nothing meaningful
+    /// to parse from an empty Accepted response.
+    /// </summary>
+    public async Task LogSearchAsync(string term, CancellationToken ct = default)
+    {
+        try
+        {
+            await _http.PostAsJsonAsync("api/recommendations/events/search", new LogSearchRequest(term), ct);
+        }
+        catch
+        {
+            // Best-effort telemetry.
+        }
+    }
+
     private sealed record ReadingPayload(object Value, string? Unit);
 }

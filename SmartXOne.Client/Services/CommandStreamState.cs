@@ -22,6 +22,8 @@ public sealed class CommandStreamState : IDisposable
 
     public QueueStatusDto? QueueStatus { get; private set; }
 
+    public List<SuggestionDto> Suggestions { get; private set; } = [];
+
     /// <summary>Set when the gateway couldn't be reached; the page shows this instead of crashing or going blank, and polling keeps retrying.</summary>
     public string? LoadError { get; private set; }
 
@@ -61,6 +63,7 @@ public sealed class CommandStreamState : IDisposable
             Devices = await _api.GetRealtimeDevicesAsync();
             RecentCommands = await _api.GetRecentCommandsAsync();
             QueueStatus = await _api.GetQueueStatusAsync();
+            Suggestions = await _api.GetSuggestionsAsync();
             LoadError = null;
         }
         catch (Exception ex)
