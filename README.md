@@ -315,6 +315,8 @@ SmartXOne.Api.slnx
 
 [Watch the Part 1 demo video](https://youtu.be/qF8Dhm-di1Q?si=Jetiuq1pzNJEf0Q5)
 
+Part 2 Demo : https://youtu.be/HFOcycsGsBg?si=0iHvWOxfodBg6PIL
+
 The video walks through sensor registration, live telemetry ingestion, file upload, the
 anomaly spotlight, and shows where each required C# concept (generics, operator overloading,
 advanced arrays/lists, recursion) runs in the actual application.
