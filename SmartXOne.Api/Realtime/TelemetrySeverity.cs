@@ -11,27 +11,36 @@ namespace SmartXOne.Api.Realtime;
 /// </summary>
 internal static class TelemetrySeverity
 {
-    public static AlertSeverity Classify(RealtimeDeviceKind kind, double value) => kind switch
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is NaN or infinite, which no real sensor can report.</exception>
+    public static AlertSeverity Classify(RealtimeDeviceKind kind, double value)
     {
-        // Hydroponics moisture: a severe drop risks the crop.
-        RealtimeDeviceKind.EnvironmentalSensor => value switch
+        if (!double.IsFinite(value))
         {
-            < 20 => AlertSeverity.Critical,
-            < 30 => AlertSeverity.Elevated,
-            _ => AlertSeverity.Normal,
-        },
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Telemetry value must be a finite number.");
+        }
 
-        // Smart plug wattage: a severe spike risks the circuit/equipment.
-        RealtimeDeviceKind.SmartPlug => value switch
+        return kind switch
         {
-            > 2000 => AlertSeverity.Critical,
-            > 1500 => AlertSeverity.Elevated,
+            // Hydroponics moisture: a severe drop risks the crop.
+            RealtimeDeviceKind.EnvironmentalSensor => value switch
+            {
+                < 20 => AlertSeverity.Critical,
+                < 30 => AlertSeverity.Elevated,
+                _ => AlertSeverity.Normal,
+            },
+
+            // Smart plug wattage: a severe spike risks the circuit/equipment.
+            RealtimeDeviceKind.SmartPlug => value switch
+            {
+                > 2000 => AlertSeverity.Critical,
+                > 1500 => AlertSeverity.Elevated,
+                _ => AlertSeverity.Normal,
+            },
+
+            // Actuator state changes go through the command stream, not telemetry severity.
+            RealtimeDeviceKind.ActuatorNode => AlertSeverity.Normal,
+
             _ => AlertSeverity.Normal,
-        },
-
-        // Actuator state changes go through the command stream, not telemetry severity.
-        RealtimeDeviceKind.ActuatorNode => AlertSeverity.Normal,
-
-        _ => AlertSeverity.Normal,
-    };
+        };
+    }
 }

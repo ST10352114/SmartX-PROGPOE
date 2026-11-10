@@ -77,11 +77,30 @@ public sealed class IngestionBuffer<T> : ICollection<IngestionEntry<T>>
     /// Stored (accepted) or Received -&gt; Rejected (failed validation), storing
     /// it in whichever log applies, and returns the resulting entry.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="packet"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The validation rule itself threw. The original exception is kept as the
+    /// inner exception, with the sensor id added so the failure is traceable.
+    /// </exception>
     public IngestionEntry<T> Ingest(TelemetryPacket<T> packet)
     {
+        ArgumentNullException.ThrowIfNull(packet);
+
         var entry = new IngestionEntry<T> { Packet = packet, State = IngestionState.Received };
 
-        var rejectionReason = _validate?.Invoke(packet);
+        string? rejectionReason;
+        try
+        {
+            rejectionReason = _validate?.Invoke(packet);
+        }
+        catch (Exception ex)
+        {
+            // A faulty rule is a bug in the caller's validator, not bad data, so
+            // it isn't recorded as a Rejected reading - it surfaces as an error.
+            throw new InvalidOperationException(
+                $"The validation rule failed while checking a reading from '{packet.SensorId}'.", ex);
+        }
+
         if (rejectionReason is not null)
         {
             entry.State = IngestionState.Rejected;
@@ -139,9 +158,18 @@ public sealed class IngestionBuffer<T> : ICollection<IngestionEntry<T>>
 
     public bool Contains(IngestionEntry<T> item) => this.Any(e => ReferenceEquals(e, item));
 
+    /// <exception cref="ArgumentNullException"><paramref name="array"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="arrayIndex"/> is negative.</exception>
+    /// <exception cref="ArgumentException"><paramref name="array"/> is too small to hold every entry from <paramref name="arrayIndex"/>.</exception>
     public void CopyTo(IngestionEntry<T>[] array, int arrayIndex)
     {
         ArgumentNullException.ThrowIfNull(array);
+        ArgumentOutOfRangeException.ThrowIfNegative(arrayIndex);
+        if (array.Length - arrayIndex < _count)
+        {
+            throw new ArgumentException("Destination array is too small for this buffer's entries.", nameof(array));
+        }
+
         for (var i = 0; i < _count; i++)
         {
             array[arrayIndex + i] = this[i];

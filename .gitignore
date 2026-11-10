@@ -361,3 +361,5 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Encrypted attachment uploads written by the API at runtime
+SmartXOne.Api/data/*.enc

@@ -50,6 +50,11 @@ public static class EncryptedAttachmentCodec
     public static async Task<EncryptResult> EncryptToFileAsync(
         Stream plaintextSource, string destinationPath, byte[] key, long maxPlaintextBytes, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(plaintextSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPlaintextBytes);
+
         var baseNonce = RandomNumberGenerator.GetBytes(NonceSizeBytes);
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -107,12 +112,39 @@ public static class EncryptedAttachmentCodec
             // from a multipart section (its limit counts multipart framing overhead
             // too, so it can fire a little before our own byte-for-byte count does).
             // Either way, don't leave a partial encrypted file behind.
-            if (File.Exists(destinationPath))
-            {
-                File.Delete(destinationPath);
-            }
-
+            DeletePartialFile(destinationPath);
             throw;
+        }
+        catch (Exception)
+        {
+            // Anything else - the client aborting the upload (OperationCanceledException),
+            // a full disk or broken request stream (IOException), an AES failure
+            // (CryptographicException) - still leaves an incomplete output file,
+            // so it is removed the same way before the exception carries on up.
+            DeletePartialFile(destinationPath);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort removal of an incomplete output file. A failure to delete is
+    /// deliberately not allowed to replace the original exception the caller is
+    /// about to see, which is the one that explains what actually went wrong.
+    /// </summary>
+    private static void DeletePartialFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left for the operator to clean up; the .enc file is unreadable
+            // without its metadata anyway, so nothing sensitive is exposed.
+            System.Diagnostics.Trace.TraceWarning($"Could not delete partial attachment '{path}': {ex.Message}");
         }
     }
 
@@ -126,7 +158,27 @@ public static class EncryptedAttachmentCodec
     /// corrupted, or the wrong key was used. Thrown before that chunk's plaintext
     /// is written, so no unverified bytes ever reach <paramref name="destination"/>.
     /// </exception>
+    /// <exception cref="InvalidDataException">The file isn't an envelope this codec wrote, or it is corrupt or truncated.</exception>
     public static async Task DecryptToStreamAsync(string sourcePath, Stream destination, byte[] key, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(key);
+
+        try
+        {
+            await DecryptCoreAsync(sourcePath, destination, key, ct);
+        }
+        catch (EndOfStreamException ex)
+        {
+            // ReadExactlyAsync ran out of bytes mid-header or mid-chunk: the
+            // file was cut short. Reported the same way as the other structural
+            // problems so callers have one exception type for "corrupt file".
+            throw new InvalidDataException($"Encrypted attachment '{Path.GetFileName(sourcePath)}' is truncated.", ex);
+        }
+    }
+
+    private static async Task DecryptCoreAsync(string sourcePath, Stream destination, byte[] key, CancellationToken ct)
     {
         await using var source = new FileStream(
             sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,

@@ -1,6 +1,13 @@
-// Source attribution: Adapted from Telerik Blazor FAQ 
-// https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
+// Code Attribution
+// Purpose: Hosting model of an ASP.NET Core API serving a separately-hosted
+//          Blazor WebAssembly client.
+// Author: Progress Telerik
+// Title: What is Blazor WebAssembly (WASM)?
+// Year: 2025
+// URL/DOI: https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
+// Accessed: 10 November 2026
 
+using SmartXOne.Api.Infrastructure;
 using SmartXOne.Api.Issues;
 using SmartXOne.Api.Realtime;
 using SmartXOne.Api.Recommendations;
@@ -29,6 +36,11 @@ builder.Services.AddHostedService<TelemetryIngestionBackgroundService>();
 // DeviceRegistry, so it's registered after it.
 builder.Services.AddSingleton<RecommendationEngine>();
 
+// Global safety net behind every endpoint's own try/catch: anything that still
+// escapes is logged and returned as an RFC 7807 ProblemDetails body.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+
 // Explicit outer ceiling on any request body (Kestrel's own default is ~28.6 MB).
 // Attachments are additionally capped per-file inside the upload endpoint itself
 // (SensorEndpoints.MaxAttachmentSizeBytes); this is just the server-wide backstop.
@@ -53,25 +65,47 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+app.UseExceptionHandler();
 app.UseCors(ClientCorsPolicy);
 
 
-app.MapGet("/api/gateway/info", (IWebHostEnvironment env) =>
+app.MapGet("/api/gateway/info", (IWebHostEnvironment env, ILogger<Program> logger) =>
 {
-    var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+    try
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
 
-    return Results.Ok(new GatewayInfo(
-        Service: "Smart-X Data Ingestion and Validation Gateway",
-        Version: version,
-        Environment: env.EnvironmentName,
-        ServerTimeUtc: DateTimeOffset.UtcNow,
-        Message: "Gateway API online. Client <-> API <-> Shared round trip OK."));
+        return Results.Ok(new GatewayInfo(
+            Service: "Smart-X Data Ingestion and Validation Gateway",
+            Version: version,
+            Environment: env.EnvironmentName,
+            ServerTimeUtc: DateTimeOffset.UtcNow,
+            Message: "Gateway API online. Client <-> API <-> Shared round trip OK."));
+    }
+    catch (Exception ex)
+    {
+        return ApiProblem.Unexpected(logger, ex, "Read gateway info", subject: null);
+    }
 });
 
 // --- Phase 3: live proof of the four assessed C# features --------------------
 // Runs the real SmartX.Shared types (generics / operator overloading / advanced
 // arrays / recursion) and returns what each produced.
-app.MapGet("/api/demo/oop", () => Results.Ok(SharedFeatureDemo.Run()));
+app.MapGet("/api/demo/oop", (ILogger<Program> logger) =>
+{
+    try
+    {
+        return Results.Ok(SharedFeatureDemo.Run());
+    }
+    catch (ArgumentException ex)
+    {
+        return ApiProblem.Handled(logger, ex, StatusCodes.Status400BadRequest, "Run shared feature demo", subject: null);
+    }
+    catch (Exception ex)
+    {
+        return ApiProblem.Unexpected(logger, ex, "Run shared feature demo", subject: null);
+    }
+});
 
 // --- Phase 4: sensor registration, telemetry submission, listing, profile upload ---
 app.MapSensorEndpoints();
@@ -86,8 +120,17 @@ app.MapRealtimeEndpoints();
 app.MapRecommendationEndpoints();
 
 
-var demo = SharedFeatureDemo.Run();
-app.Logger.LogInformation("Shared feature demo:\n  Generics: {Generics}\n  Operators: {Operators}\n  Arrays: {Arrays}\n  Recursion: {Recursion}",
-    demo.Generics, demo.OperatorOverloading, demo.AdvancedArrays, demo.Recursion);
+// The start-up demo is informational only, so a failure in it is logged and
+// the gateway still starts instead of taking every endpoint down with it.
+try
+{
+    var demo = SharedFeatureDemo.Run();
+    app.Logger.LogInformation("Shared feature demo:\n  Generics: {Generics}\n  Operators: {Operators}\n  Arrays: {Arrays}\n  Recursion: {Recursion}",
+        demo.Generics, demo.OperatorOverloading, demo.AdvancedArrays, demo.Recursion);
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Shared feature demo failed at start-up; continuing without it.");
+}
 
 app.Run();

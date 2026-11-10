@@ -8,8 +8,11 @@ namespace SmartXOne.Shared.Deployment;
 /// </summary>
 public sealed class DeploymentNode
 {
+    /// <exception cref="ArgumentException"><paramref name="id"/> is null or blank.</exception>
     public DeploymentNode(string id, string name, DeploymentLevel level)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
         Id = id;
         Name = name;
         Level = level;
@@ -28,8 +31,16 @@ public sealed class DeploymentNode
     public List<DeploymentNode> Children { get; } = [];
 
     /// <summary>Fluent helper for building trees in code / tests / seed data.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="child"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="child"/> is this node itself (a one-node cycle).</exception>
     public DeploymentNode AddChild(DeploymentNode child)
     {
+        ArgumentNullException.ThrowIfNull(child);
+        if (ReferenceEquals(child, this))
+        {
+            throw new ArgumentException("A deployment node cannot be its own child.", nameof(child));
+        }
+
         Children.Add(child);
         return this;
     }

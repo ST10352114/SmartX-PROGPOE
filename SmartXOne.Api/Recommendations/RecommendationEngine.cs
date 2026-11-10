@@ -35,15 +35,18 @@ public sealed class RecommendationEngine
     private static readonly TimeSpan CorrelationWindow = TimeSpan.FromMinutes(5);
 
     private readonly DeviceRegistry _registry;
+    private readonly ILogger<RecommendationEngine> _logger;
     private readonly List<RecommendationEvent> _events = [];
     private readonly Dictionary<string, Dictionary<string, int>> _transitions = [];
     private readonly Lock _gate = new();
 
-    public RecommendationEngine(DeviceRegistry registry)
+    public RecommendationEngine(DeviceRegistry registry, ILogger<RecommendationEngine> logger)
     {
         _registry = registry;
+        _logger = logger;
     }
 
+    /// <summary>Logs a user search term (blank terms are ignored - there is nothing to learn from them).</summary>
     public void LogSearch(string term)
     {
         if (!string.IsNullOrWhiteSpace(term))
@@ -55,20 +58,49 @@ public sealed class RecommendationEngine
     internal void LogCommand(string? deviceId, DeviceCommandType type)
         => LogEvent(RecommendationEventType.CommandIssued, deviceId is null ? type.ToString() : $"{deviceId}:{type}");
 
-    internal void LogConditionCritical(string deviceId) => LogEvent(RecommendationEventType.ConditionCritical, deviceId);
+    /// <exception cref="ArgumentException"><paramref name="deviceId"/> is null or blank.</exception>
+    internal void LogConditionCritical(string deviceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        LogEvent(RecommendationEventType.ConditionCritical, deviceId);
+    }
 
-    internal void LogConditionDisconnected(string deviceId) => LogEvent(RecommendationEventType.ConditionDisconnected, deviceId);
+    /// <exception cref="ArgumentException"><paramref name="deviceId"/> is null or blank.</exception>
+    internal void LogConditionDisconnected(string deviceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        LogEvent(RecommendationEventType.ConditionDisconnected, deviceId);
+    }
 
     /// <summary>
     /// Records <paramref name="type"/>/<paramref name="subject"/>, and for every
     /// condition event already in the log within <see cref="CorrelationWindow"/>
     /// before it, increments the transition count from that condition to this
     /// new event - "this followed that, within the window, one more time".
+    /// <para>
+    /// Learning is a side effect of commands and alerts, never their purpose,
+    /// so a failure here is logged and swallowed deliberately rather than
+    /// failing the command or the background consumer that triggered it.
+    /// </para>
     /// </summary>
     private void LogEvent(RecommendationEventType type, string subject)
     {
-        var newEvent = new RecommendationEvent(type, subject, DateTimeOffset.UtcNow);
+        try
+        {
+            RecordEvent(new RecommendationEvent(type, subject, DateTimeOffset.UtcNow));
+        }
+        catch (OverflowException ex)
+        {
+            _logger.LogError(ex, "Transition count overflowed while logging {EventType} for {Subject}; event dropped.", type, subject);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to log {EventType} for {Subject}; the recommendation engine will skip this event.", type, subject);
+        }
+    }
 
+    private void RecordEvent(RecommendationEvent newEvent)
+    {
         lock (_gate)
         {
             foreach (var priorEvent in _events)
@@ -95,7 +127,7 @@ public sealed class RecommendationEngine
                     _transitions[priorEvent.Key] = edges;
                 }
 
-                edges[newEvent.Key] = edges.GetValueOrDefault(newEvent.Key) + 1;
+                edges[newEvent.Key] = checked(edges.GetValueOrDefault(newEvent.Key) + 1);
             }
 
             _events.Add(newEvent);
@@ -113,11 +145,33 @@ public sealed class RecommendationEngine
     /// </summary>
     public List<SuggestionDto> GetSuggestions()
     {
+        try
+        {
+            return BuildSuggestions();
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogError(ex, "Transition table changed while building suggestions.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to build suggestions.");
+            throw;
+        }
+    }
+
+    private List<SuggestionDto> BuildSuggestions()
+    {
         var suggestions = new List<SuggestionDto>();
+
+        // Read the registry before taking this engine's own lock, so the two
+        // locks are never held at the same time.
+        var devices = _registry.GetAll();
 
         lock (_gate)
         {
-            foreach (var device in _registry.GetAll())
+            foreach (var device in devices)
             {
                 if (device.LastSeverity == AlertSeverity.Critical)
                 {
@@ -190,6 +244,11 @@ public sealed class RecommendationEngine
     private static string Describe(string key)
     {
         var separator = key.IndexOf(':');
+        if (separator < 0)
+        {
+            return key; // not a "{Type}:{Subject}" key - show it as-is rather than throw on the slice below
+        }
+
         var type = key[..separator];
         var subject = key[(separator + 1)..];
 

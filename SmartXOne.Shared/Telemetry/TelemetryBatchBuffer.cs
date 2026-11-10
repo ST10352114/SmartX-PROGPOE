@@ -51,9 +51,13 @@ public sealed class TelemetryBatchBuffer<T>
     public IReadOnlyList<IReadOnlyList<TelemetryPacket<T>>> Batches => _batches;
 
     /// <summary>Replaces one device's row of sequential readings.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="readings"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="deviceIndex"/> isn't a valid device row.</exception>
     public void SetDeviceBatch(int deviceIndex, TelemetryPacket<T>[] readings)
     {
         ArgumentNullException.ThrowIfNull(readings);
+        ArgumentOutOfRangeException.ThrowIfNegative(deviceIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(deviceIndex, _batches.Length);
         _batches[deviceIndex] = readings;
     }
 

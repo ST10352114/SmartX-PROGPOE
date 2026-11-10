@@ -22,7 +22,7 @@ namespace SmartXOne.Api.Realtime;
 /// await new work instead of polling.
 /// </para>
 /// </summary>
-public sealed class TelemetryQueueService
+public sealed class TelemetryQueueService(ILogger<TelemetryQueueService> logger)
 {
     private readonly Queue<TelemetryEnvelope> _standard = new();
     private readonly PriorityQueue<TelemetryEnvelope, int> _priority = new();
@@ -43,21 +43,39 @@ public sealed class TelemetryQueueService
 
     public long ProcessedCount => Interlocked.Read(ref _processedCount);
 
+    /// <exception cref="ArgumentNullException"><paramref name="envelope"/> is null.</exception>
     internal void Enqueue(TelemetryEnvelope envelope)
     {
-        lock (_gate)
-        {
-            if (envelope.Severity == AlertSeverity.Critical)
-            {
-                _priority.Enqueue(envelope, (int)envelope.Severity);
-            }
-            else
-            {
-                _standard.Enqueue(envelope);
-            }
-        }
+        ArgumentNullException.ThrowIfNull(envelope);
 
-        _itemAvailable.Release();
+        try
+        {
+            lock (_gate)
+            {
+                if (envelope.Severity == AlertSeverity.Critical)
+                {
+                    _priority.Enqueue(envelope, (int)envelope.Severity);
+                }
+                else
+                {
+                    _standard.Enqueue(envelope);
+                }
+            }
+
+            _itemAvailable.Release();
+        }
+        catch (SemaphoreFullException ex)
+        {
+            // Only possible if the semaphore count ever exceeded int.MaxValue -
+            // the item is queued but the consumer won't be woken for it.
+            logger.LogError(ex, "Queue signal overflowed while enqueuing telemetry from {DeviceId}.", envelope.DeviceId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to enqueue {Severity} telemetry from {DeviceId}.", envelope.Severity, envelope.DeviceId);
+            throw;
+        }
     }
 
     /// <summary>
@@ -65,20 +83,51 @@ public sealed class TelemetryQueueService
     /// highest-priority one: the priority queue first (if non-empty), the
     /// standard FIFO queue otherwise.
     /// </summary>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled while waiting.</exception>
     internal async Task<TelemetryEnvelope> DequeueAsync(CancellationToken ct)
     {
-        await _itemAvailable.WaitAsync(ct);
-
-        lock (_gate)
+        try
         {
-            var envelope = _priority.TryDequeue(out var priorityItem, out _)
-                ? priorityItem
-                : _standard.Dequeue();
+            await _itemAvailable.WaitAsync(ct);
 
-            Interlocked.Increment(ref _processedCount);
-            return envelope;
+            lock (_gate)
+            {
+                var envelope = _priority.TryDequeue(out var priorityItem, out _)
+                    ? priorityItem
+                    : _standard.Dequeue();
+
+                Interlocked.Increment(ref _processedCount);
+                return envelope;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // normal shutdown signal - the caller decides what to do with it
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The semaphore said an item was ready but both queues were empty -
+            // the signal and the collections have drifted out of step.
+            logger.LogError(ex, "Queue signal and queue contents are out of step (signalled, but both queues empty).");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected failure dequeuing telemetry.");
+            throw;
         }
     }
 
-    public QueueStatusDto GetStatus() => new(StandardQueueDepth, PriorityQueueDepth, ProcessedCount);
+    public QueueStatusDto GetStatus()
+    {
+        try
+        {
+            return new(StandardQueueDepth, PriorityQueueDepth, ProcessedCount);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to read queue status.");
+            throw;
+        }
+    }
 }

@@ -32,30 +32,45 @@ internal sealed class CategoryHistory<T>
     private readonly IngestionBuffer<T>?[] _ingestionBuffers = new IngestionBuffer<T>?[MaxDevices];
     private readonly Dictionary<string, int> _deviceIndexBySensorId = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<TelemetryPacket<T>, string?>? _validate;
+    private readonly ILogger _logger;
     private int _nextDeviceIndex;
 
-    public CategoryHistory(Func<TelemetryPacket<T>, string?>? validate = null)
+    public CategoryHistory(ILogger logger, Func<TelemetryPacket<T>, string?>? validate = null)
     {
+        _logger = logger;
         _validate = validate;
     }
 
     /// <returns><c>false</c> if every device row in this category is already claimed.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> is null or blank.</exception>
     public bool TryReserveDevice(string sensorId)
     {
-        if (_deviceIndexBySensorId.ContainsKey(sensorId))
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+
+        try
         {
+            if (_deviceIndexBySensorId.ContainsKey(sensorId))
+            {
+                return true;
+            }
+
+            if (_nextDeviceIndex >= MaxDevices)
+            {
+                _logger.LogWarning("{Category} history is full ({MaxDevices} devices); {SensorId} was not reserved.",
+                    typeof(T).Name, MaxDevices, sensorId);
+                return false;
+            }
+
+            var deviceIndex = _nextDeviceIndex++;
+            _deviceIndexBySensorId[sensorId] = deviceIndex;
+            _ingestionBuffers[deviceIndex] = new IngestionBuffer<T>(MaxReadingsPerDevice, _validate);
             return true;
         }
-
-        if (_nextDeviceIndex >= MaxDevices)
+        catch (Exception ex)
         {
-            return false;
+            _logger.LogError(ex, "Failed to reserve a {Category} history row for {SensorId}.", typeof(T).Name, sensorId);
+            throw;
         }
-
-        var deviceIndex = _nextDeviceIndex++;
-        _deviceIndexBySensorId[sensorId] = deviceIndex;
-        _ingestionBuffers[deviceIndex] = new IngestionBuffer<T>(MaxReadingsPerDevice, _validate);
-        return true;
     }
 
     /// <summary>
@@ -65,28 +80,67 @@ internal sealed class CategoryHistory<T>
     /// readings into the Phase 3 jagged array so <see cref="GetSensorHistory"/>
     /// keeps working unchanged.
     /// </summary>
+    /// <exception cref="KeyNotFoundException">No history row was reserved for <paramref name="sensorId"/>.</exception>
     public IngestionEntry<T> Append(string sensorId, TelemetryPacket<T> reading)
     {
-        var deviceIndex = _deviceIndexBySensorId[sensorId];
-        var ingestionBuffer = _ingestionBuffers[deviceIndex]!;
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+        ArgumentNullException.ThrowIfNull(reading);
 
-        var entry = ingestionBuffer.Ingest(reading);
-
-        if (entry.State == IngestionState.Stored)
+        try
         {
-            _buffer.SetDeviceBatch(deviceIndex, ingestionBuffer.Select(e => e.Packet).ToArray());
-        }
+            if (!_deviceIndexBySensorId.TryGetValue(sensorId, out var deviceIndex))
+            {
+                throw new KeyNotFoundException($"No {typeof(T).Name} history row is reserved for sensor '{sensorId}'.");
+            }
 
-        return entry;
+            var ingestionBuffer = _ingestionBuffers[deviceIndex]
+                ?? throw new InvalidOperationException($"History row {deviceIndex} for '{sensorId}' was reserved but never initialised.");
+
+            var entry = ingestionBuffer.Ingest(reading);
+
+            if (entry.State == IngestionState.Stored)
+            {
+                _buffer.SetDeviceBatch(deviceIndex, ingestionBuffer.Select(e => e.Packet).ToArray());
+            }
+
+            return entry;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            _logger.LogWarning(ex, "Reading for {SensorId} arrived with no history row reserved.", sensorId);
+            throw;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogError(ex, "History buffer for {SensorId} is in an invalid state.", sensorId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to append a {Category} reading for {SensorId}.", typeof(T).Name, sensorId);
+            throw;
+        }
     }
 
     /// <summary>This sensor's own readings, oldest first - the Phase 3 jagged-array buffer's stage-2 flatten.</summary>
     public List<TelemetryPacket<T>> GetSensorHistory(string sensorId)
-        => _deviceIndexBySensorId.ContainsKey(sensorId)
-            ? _buffer.ToOptimisedList()
-                .Where(reading => string.Equals(reading.SensorId, sensorId, StringComparison.OrdinalIgnoreCase))
-                .ToList()
-            : [];
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+
+        try
+        {
+            return _deviceIndexBySensorId.ContainsKey(sensorId)
+                ? _buffer.ToOptimisedList()
+                    .Where(reading => string.Equals(reading.SensorId, sensorId, StringComparison.OrdinalIgnoreCase))
+                    .ToList()
+                : [];
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the {Category} history for {SensorId}.", typeof(T).Name, sensorId);
+            throw;
+        }
+    }
 
     /// <summary>
     /// This sensor's ingestion log: every currently-held Stored reading plus its
@@ -95,15 +149,24 @@ internal sealed class CategoryHistory<T>
     /// </summary>
     public List<IngestionEntry<T>> GetIngestionLog(string sensorId)
     {
-        if (!_deviceIndexBySensorId.TryGetValue(sensorId, out var deviceIndex))
-        {
-            return [];
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
 
-        var buffer = _ingestionBuffers[deviceIndex]!;
-        return buffer
-            .Concat(buffer.Rejected)
-            .OrderBy(e => e.Packet.Timestamp)
-            .ToList();
+        try
+        {
+            if (!_deviceIndexBySensorId.TryGetValue(sensorId, out var deviceIndex) || _ingestionBuffers[deviceIndex] is not { } buffer)
+            {
+                return [];
+            }
+
+            return buffer
+                .Concat(buffer.Rejected)
+                .OrderBy(e => e.Packet.Timestamp)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the ingestion log for {SensorId}.", sensorId);
+            throw;
+        }
     }
 }

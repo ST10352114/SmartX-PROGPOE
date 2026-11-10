@@ -33,57 +33,106 @@ public sealed class SensorRepository
     private readonly Dictionary<string, SensorRecord> _sensors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
     private readonly DeploymentNode _deploymentRoot = DeploymentSeed.BuildRoot();
+    private readonly ILogger<SensorRepository> _logger;
 
-    private readonly CategoryHistory<float> _environmentalHistory = new(PacketValidation.Environmental);
-    private readonly CategoryHistory<int> _powerHistory = new(PacketValidation.Power);
-    private readonly CategoryHistory<bool> _actuatorHistory = new(PacketValidation.Actuator);
+    private readonly CategoryHistory<float> _environmentalHistory;
+    private readonly CategoryHistory<int> _powerHistory;
+    private readonly CategoryHistory<bool> _actuatorHistory;
 
+    public SensorRepository(ILogger<SensorRepository> logger)
+    {
+        _logger = logger;
+        _environmentalHistory = new(logger, PacketValidation.Environmental);
+        _powerHistory = new(logger, PacketValidation.Power);
+        _actuatorHistory = new(logger, PacketValidation.Actuator);
+    }
+
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
+    /// <exception cref="ArgumentException">The sensor id or deployment node id is blank.</exception>
     public RegisterSensorResult Register(RegisterSensorRequest request)
     {
-        if (!DeploymentTreeValidator.ContainsNode(_deploymentRoot, request.DeploymentNodeId))
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.SensorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.DeploymentNodeId);
+
+        try
         {
-            return RegisterSensorResult.UnknownDeploymentNode;
+            if (!DeploymentTreeValidator.ContainsNode(_deploymentRoot, request.DeploymentNodeId))
+            {
+                return RegisterSensorResult.UnknownDeploymentNode;
+            }
+
+            lock (_gate)
+            {
+                if (_sensors.ContainsKey(request.SensorId))
+                {
+                    return RegisterSensorResult.DuplicateSensorId;
+                }
+
+                var reserved = request.Category switch
+                {
+                    SensorCategory.Environmental => _environmentalHistory.TryReserveDevice(request.SensorId),
+                    SensorCategory.PowerConsumption => _powerHistory.TryReserveDevice(request.SensorId),
+                    SensorCategory.Actuator => _actuatorHistory.TryReserveDevice(request.SensorId),
+                    _ => false,
+                };
+
+                if (!reserved)
+                {
+                    return RegisterSensorResult.CategoryCapacityReached;
+                }
+
+                _sensors[request.SensorId] = new SensorRecord(
+                    request.SensorId, request.DeploymentNodeId, request.Category, request.DisplayName);
+                return RegisterSensorResult.Registered;
+            }
         }
-
-        lock (_gate)
+        catch (InvalidOperationException ex)
         {
-            if (_sensors.ContainsKey(request.SensorId))
-            {
-                return RegisterSensorResult.DuplicateSensorId;
-            }
-
-            var reserved = request.Category switch
-            {
-                SensorCategory.Environmental => _environmentalHistory.TryReserveDevice(request.SensorId),
-                SensorCategory.PowerConsumption => _powerHistory.TryReserveDevice(request.SensorId),
-                SensorCategory.Actuator => _actuatorHistory.TryReserveDevice(request.SensorId),
-                _ => false,
-            };
-
-            if (!reserved)
-            {
-                return RegisterSensorResult.CategoryCapacityReached;
-            }
-
-            _sensors[request.SensorId] = new SensorRecord(
-                request.SensorId, request.DeploymentNodeId, request.Category, request.DisplayName);
-            return RegisterSensorResult.Registered;
+            // DeploymentTreeValidator's depth cap: the configured tree is malformed.
+            _logger.LogError(ex, "Deployment tree check failed while registering {SensorId} at {NodeId}.",
+                request.SensorId, request.DeploymentNodeId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to register sensor {SensorId}.", request.SensorId);
+            throw;
         }
     }
 
     public IReadOnlyList<SensorSummary> GetAll()
     {
-        lock (_gate)
+        try
         {
-            return _sensors.Values.Select(s => s.ToSummary()).ToList();
+            lock (_gate)
+            {
+                return _sensors.Values.Select(s => s.ToSummary()).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to list registered sensors.");
+            throw;
         }
     }
 
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> is null or blank.</exception>
     public SensorSummary? GetSummary(string sensorId)
     {
-        lock (_gate)
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+
+        try
         {
-            return _sensors.TryGetValue(sensorId, out var record) ? record.ToSummary() : null;
+            lock (_gate)
+            {
+                return _sensors.TryGetValue(sensorId, out var record) ? record.ToSummary() : null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read sensor {SensorId}.", sensorId);
+            throw;
         }
     }
 
@@ -93,25 +142,36 @@ public sealed class SensorRepository
     /// conversion, exposed for the ingestion UI to display.
     /// </summary>
     /// <returns><c>null</c> if no sensor is registered with <paramref name="sensorId"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> is null or blank.</exception>
     public IReadOnlyList<TelemetryReadingDto>? GetHistory(string sensorId)
     {
-        lock (_gate)
-        {
-            if (!_sensors.TryGetValue(sensorId, out var record))
-            {
-                return null;
-            }
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
 
-            return record.Category switch
+        try
+        {
+            lock (_gate)
             {
-                SensorCategory.Environmental => _environmentalHistory.GetSensorHistory(sensorId)
-                    .Select(ToDto).ToList(),
-                SensorCategory.PowerConsumption => _powerHistory.GetSensorHistory(sensorId)
-                    .Select(ToDto).ToList(),
-                SensorCategory.Actuator => _actuatorHistory.GetSensorHistory(sensorId)
-                    .Select(ToDto).ToList(),
-                _ => [],
-            };
+                if (!_sensors.TryGetValue(sensorId, out var record))
+                {
+                    return null;
+                }
+
+                return record.Category switch
+                {
+                    SensorCategory.Environmental => _environmentalHistory.GetSensorHistory(sensorId)
+                        .Select(ToDto).ToList(),
+                    SensorCategory.PowerConsumption => _powerHistory.GetSensorHistory(sensorId)
+                        .Select(ToDto).ToList(),
+                    SensorCategory.Actuator => _actuatorHistory.GetSensorHistory(sensorId)
+                        .Select(ToDto).ToList(),
+                    _ => [],
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the reading history for {SensorId}.", sensorId);
+            throw;
         }
     }
 
@@ -137,6 +197,38 @@ public sealed class SensorRepository
     /// entry is tagged <see cref="IngestionState.Rejected"/> rather than stored.
     /// </exception>
     public TelemetryReadingDto SubmitReading(string sensorId, JsonElement value, string? unit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+
+        try
+        {
+            return SubmitReadingCore(sensorId, value, unit);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            _logger.LogWarning(ex, "Reading submitted for unregistered sensor {SensorId}.", sensorId);
+            throw;
+        }
+        catch (ReadingRejectedException ex)
+        {
+            _logger.LogInformation("Reading for {SensorId} rejected by validation: {Reason}", sensorId, ex.Message);
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // JsonElement.GetSingle/GetInt32/GetBoolean: wrong JSON kind, or a
+            // number that doesn't fit the category's CLR type.
+            _logger.LogWarning(ex, "Reading for {SensorId} has a {ValueKind} value that doesn't fit its category.", sensorId, value.ValueKind);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected failure storing a reading for {SensorId}.", sensorId);
+            throw;
+        }
+    }
+
+    private TelemetryReadingDto SubmitReadingCore(string sensorId, JsonElement value, string? unit)
     {
         SensorRecord record;
         lock (_gate)
@@ -214,38 +306,63 @@ public sealed class SensorRepository
     /// <see cref="CategoryHistory{T}.GetIngestionLog"/>.
     /// </summary>
     /// <returns><c>null</c> if no sensor is registered with <paramref name="sensorId"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> is null or blank.</exception>
     public IReadOnlyList<IngestionLogEntryDto>? GetIngestionLog(string sensorId)
     {
-        lock (_gate)
-        {
-            if (!_sensors.TryGetValue(sensorId, out var record))
-            {
-                return null;
-            }
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
 
-            return record.Category switch
+        try
+        {
+            lock (_gate)
             {
-                SensorCategory.Environmental => _environmentalHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
-                SensorCategory.PowerConsumption => _powerHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
-                SensorCategory.Actuator => _actuatorHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
-                _ => [],
-            };
+                if (!_sensors.TryGetValue(sensorId, out var record))
+                {
+                    return null;
+                }
+
+                return record.Category switch
+                {
+                    SensorCategory.Environmental => _environmentalHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                    SensorCategory.PowerConsumption => _powerHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                    SensorCategory.Actuator => _actuatorHistory.GetIngestionLog(sensorId).Select(ToLogDto).ToList(),
+                    _ => [],
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the ingestion log for {SensorId}.", sensorId);
+            throw;
         }
     }
 
     /// <returns><c>false</c> if no sensor is registered with <paramref name="sensorId"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> or <paramref name="storedFileName"/> is blank.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="metadata"/> is null.</exception>
     public bool SetProfileFile(string sensorId, string storedFileName, AttachmentMetadata metadata)
     {
-        lock (_gate)
-        {
-            if (!_sensors.TryGetValue(sensorId, out var record))
-            {
-                return false;
-            }
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(storedFileName);
+        ArgumentNullException.ThrowIfNull(metadata);
 
-            record.AttachmentStoredFileName = storedFileName;
-            record.Attachment = metadata;
-            return true;
+        try
+        {
+            lock (_gate)
+            {
+                if (!_sensors.TryGetValue(sensorId, out var record))
+                {
+                    return false;
+                }
+
+                record.AttachmentStoredFileName = storedFileName;
+                record.Attachment = metadata;
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to record attachment {StoredFileName} for {SensorId}.", storedFileName, sensorId);
+            throw;
         }
     }
 
@@ -254,16 +371,27 @@ public sealed class SensorRepository
     /// disk, for the download endpoint. <c>null</c> if the sensor isn't
     /// registered or has no attachment yet.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="sensorId"/> is null or blank.</exception>
     public (AttachmentMetadata Metadata, string StoredFileName)? GetAttachment(string sensorId)
     {
-        lock (_gate)
-        {
-            if (!_sensors.TryGetValue(sensorId, out var record) || record.Attachment is null || record.AttachmentStoredFileName is null)
-            {
-                return null;
-            }
+        ArgumentException.ThrowIfNullOrWhiteSpace(sensorId);
 
-            return (record.Attachment, record.AttachmentStoredFileName);
+        try
+        {
+            lock (_gate)
+            {
+                if (!_sensors.TryGetValue(sensorId, out var record) || record.Attachment is null || record.AttachmentStoredFileName is null)
+                {
+                    return null;
+                }
+
+                return (record.Attachment, record.AttachmentStoredFileName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the attachment record for {SensorId}.", sensorId);
+            throw;
         }
     }
 

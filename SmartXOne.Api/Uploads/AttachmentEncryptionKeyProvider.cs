@@ -54,11 +54,13 @@ public sealed class AttachmentEncryptionKeyProvider
         }
         catch (FormatException ex)
         {
+            logger.LogCritical(ex, "Encryption:KeyBase64 is set but is not valid Base64; attachments cannot be encrypted.");
             throw new InvalidOperationException("Encryption:KeyBase64 is not valid Base64.", ex);
         }
 
         if (decoded.Length != KeySizeBytes)
         {
+            logger.LogCritical("Encryption:KeyBase64 decodes to {Length} bytes; AES-256 needs exactly {Expected}.", decoded.Length, KeySizeBytes);
             throw new InvalidOperationException(
                 $"Encryption:KeyBase64 must decode to exactly {KeySizeBytes} bytes (AES-256); got {decoded.Length}.");
         }
