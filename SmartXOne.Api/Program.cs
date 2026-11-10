@@ -7,6 +7,7 @@
 // URL/DOI: https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)
 // Accessed: 10 November 2026
 
+using SmartXOne.Api.History;
 using SmartXOne.Api.Infrastructure;
 using SmartXOne.Api.Issues;
 using SmartXOne.Api.Realtime;
@@ -20,6 +21,9 @@ using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Part 3 - per-device telemetry history (AVL-indexed by timestamp), fed by
+// both the sensor API and the realtime queue consumer.
+builder.Services.AddSingleton<TelemetryHistoryStore>();
 builder.Services.AddSingleton<SensorRepository>();
 builder.Services.AddSingleton<AttachmentEncryptionKeyProvider>();
 builder.Services.AddSingleton<IssueRepository>();
@@ -118,6 +122,9 @@ app.MapRealtimeEndpoints();
 
 // --- Part 2: predictive action / recommendation engine ---
 app.MapRecommendationEndpoints();
+
+// --- Part 3: telemetry history range queries ---
+app.MapHistoryEndpoints();
 
 
 // The start-up demo is informational only, so a failure in it is logged and

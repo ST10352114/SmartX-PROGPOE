@@ -24,8 +24,20 @@ public static class RealtimeEndpoints
 
             try
             {
-                var severity = TelemetrySeverity.Classify(request.DeviceKind, request.Value);
-                var envelope = new TelemetryEnvelope(request.DeviceId, request.DeviceKind, request.Value, request.Unit, severity, DateTimeOffset.UtcNow);
+                var metric = TelemetryMetrics.Normalize(request.Metric, request.DeviceKind);
+                var isPrimary = metric == TelemetryMetrics.PrimaryFor(request.DeviceKind);
+
+                // The severity thresholds are written for the primary metric (a
+                // 22 degC temperature is not a 22% moisture drop), so secondary
+                // metrics are only checked for being finite and queued as Normal.
+                if (!isPrimary && !double.IsFinite(request.Value))
+                {
+                    return ApiProblem.BadRequest("Telemetry value must be a finite number.");
+                }
+
+                var severity = isPrimary ? TelemetrySeverity.Classify(request.DeviceKind, request.Value) : AlertSeverity.Normal;
+                var envelope = new TelemetryEnvelope(
+                    request.DeviceId, request.DeviceKind, request.Value, request.Unit, severity, DateTimeOffset.UtcNow, metric, isPrimary);
                 queue.Enqueue(envelope);
 
                 return Results.Accepted(value: new { severity, queue.StandardQueueDepth, queue.PriorityQueueDepth });

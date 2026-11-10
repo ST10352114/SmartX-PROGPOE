@@ -1,3 +1,4 @@
+using SmartXOne.Api.History;
 using SmartXOne.Api.Recommendations;
 using SmartXOne.Shared.Contracts;
 
@@ -32,6 +33,7 @@ public sealed class TelemetryIngestionBackgroundService(
     TelemetryQueueService queue,
     DeviceRegistry registry,
     RecommendationEngine recommendations,
+    TelemetryHistoryStore history,
     ILogger<TelemetryIngestionBackgroundService> logger) : BackgroundService
 {
     /// <summary>Pause after an unexpected dequeue failure so a persistent fault can't spin the CPU.</summary>
@@ -75,6 +77,13 @@ public sealed class TelemetryIngestionBackgroundService(
 
     private void ProcessEnvelope(TelemetryEnvelope envelope)
     {
+        RecordHistory(envelope);
+
+        if (!envelope.IsPrimaryMetric)
+        {
+            return; // secondary metrics (temperature, battery) are history-only
+        }
+
         try
         {
             var becameCritical = registry.ApplyTelemetry(envelope);
@@ -106,6 +115,29 @@ public sealed class TelemetryIngestionBackgroundService(
         {
             // Deliberately not rethrown: one bad packet must not stop the host.
             logger.LogError(ex, "Unexpected failure processing telemetry from {DeviceId}; packet skipped.", envelope.DeviceId);
+        }
+    }
+
+    /// <summary>
+    /// Writes the reading to the history store. Kept separate from the registry
+    /// update so a history failure doesn't stop the live view updating, and
+    /// vice versa.
+    /// </summary>
+    private void RecordHistory(TelemetryEnvelope envelope)
+    {
+        try
+        {
+            history.Record(envelope.DeviceId, envelope.Metric, envelope.Value, envelope.Unit,
+                envelope.Timestamp, TelemetryHistoryStore.RealtimeSource);
+        }
+        catch (ArgumentException ex)
+        {
+            logger.LogWarning(ex, "Telemetry from {DeviceId} ({Metric}) not added to history.", envelope.DeviceId, envelope.Metric);
+        }
+        catch (Exception ex)
+        {
+            // Not rethrown, for the same reason as ProcessEnvelope.
+            logger.LogError(ex, "Recording history for {DeviceId} failed; live processing continues.", envelope.DeviceId);
         }
     }
 }

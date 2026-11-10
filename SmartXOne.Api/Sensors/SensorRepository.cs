@@ -1,4 +1,5 @@
 using System.Text.Json;
+using SmartXOne.Api.History;
 using SmartXOne.Shared.Collections;
 using SmartXOne.Shared.Contracts;
 using SmartXOne.Shared.Deployment;
@@ -34,14 +35,16 @@ public sealed class SensorRepository
     private readonly Lock _gate = new();
     private readonly DeploymentNode _deploymentRoot = DeploymentSeed.BuildRoot();
     private readonly ILogger<SensorRepository> _logger;
+    private readonly TelemetryHistoryStore _history;
 
     private readonly CategoryHistory<float> _environmentalHistory;
     private readonly CategoryHistory<int> _powerHistory;
     private readonly CategoryHistory<bool> _actuatorHistory;
 
-    public SensorRepository(ILogger<SensorRepository> logger)
+    public SensorRepository(ILogger<SensorRepository> logger, TelemetryHistoryStore history)
     {
         _logger = logger;
+        _history = history;
         _environmentalHistory = new(logger, PacketValidation.Environmental);
         _powerHistory = new(logger, PacketValidation.Power);
         _actuatorHistory = new(logger, PacketValidation.Actuator);
@@ -240,6 +243,8 @@ public sealed class SensorRepository
         }
 
         var resolvedUnit = unit ?? record.Category.DefaultUnit();
+        TelemetryReadingDto stored;
+        double historyValue;
 
         lock (_gate)
         {
@@ -256,6 +261,7 @@ public sealed class SensorRepository
 
                     record.ChangeSinceLast = ComputeChange(_environmentalHistory.GetSensorHistory(sensorId));
                     record.LatestReading = packet;
+                    historyValue = packet.Value;
                     break;
                 }
 
@@ -270,6 +276,7 @@ public sealed class SensorRepository
 
                     record.ChangeSinceLast = ComputeChange(_powerHistory.GetSensorHistory(sensorId));
                     record.LatestReading = packet;
+                    historyValue = packet.Value;
                     break;
                 }
 
@@ -284,6 +291,7 @@ public sealed class SensorRepository
                     _actuatorHistory.Append(sensorId, packet);
                     record.ChangeSinceLast = null;
                     record.LatestReading = packet;
+                    historyValue = packet.Value ? 1 : 0; // history stores numbers: on = 1, off = 0
                     break;
                 }
 
@@ -291,13 +299,28 @@ public sealed class SensorRepository
                     throw new ArgumentOutOfRangeException(nameof(sensorId), record.Category, message: null);
             }
 
-            return new TelemetryReadingDto(
+            stored = new TelemetryReadingDto(
                 record.LatestReading!.Unit,
                 record.LatestReading!.Timestamp,
                 record.LatestReading!.ValueType,
                 record.LatestReading!.FormatValue(),
                 record.ChangeSinceLast);
         }
+
+        // Outside the repository lock: the history store has its own lock, and
+        // the reading is already stored, so a history failure is logged rather
+        // than reported to the caller as a rejected reading.
+        try
+        {
+            _history.Record(sensorId, TelemetryMetrics.PrimaryFor(record.Category), historyValue,
+                stored.Unit, stored.Timestamp, TelemetryHistoryStore.SensorSource);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reading for {SensorId} stored but not added to history.", sensorId);
+        }
+
+        return stored;
     }
 
     /// <summary>

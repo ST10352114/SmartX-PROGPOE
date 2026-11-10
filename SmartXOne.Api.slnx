@@ -3,4 +3,5 @@
   <Project Path="SmartXOne.Client/SmartXOne.Client.csproj" />
   <Project Path="SmartXOne.DeviceSimulator/SmartXOne.DeviceSimulator.csproj" />
   <Project Path="SmartXOne.Shared/SmartXOne.Shared.csproj" />
+  <Project Path="SmartXOne.Tests/SmartXOne.Tests.csproj" />
 </Solution>

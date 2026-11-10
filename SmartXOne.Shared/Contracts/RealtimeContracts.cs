@@ -24,7 +24,8 @@ public enum AlertSeverity
 /// <param name="DeviceKind">Determines which severity rule classifies this reading.</param>
 /// <param name="Value">The raw reading (moisture %, wattage W - interpretation depends on <paramref name="DeviceKind"/>).</param>
 /// <param name="Unit">Unit of measure, for display.</param>
-public record SubmitTelemetryRequest(string DeviceId, RealtimeDeviceKind DeviceKind, double Value, string Unit);
+/// <param name="Metric">What the value measures (e.g. <c>temperature</c>). Optional: defaults to the device kind's primary metric - see <see cref="TelemetryMetrics"/>.</param>
+public record SubmitTelemetryRequest(string DeviceId, RealtimeDeviceKind DeviceKind, double Value, string Unit, string? Metric = null);
 
 /// <param name="Type">Which single-device override to apply (not <see cref="DeviceCommandType.ShutAllValves"/> - that's its own endpoint, since it isn't scoped to one device).</param>
 public record IssueCommandRequest(DeviceCommandType Type);
