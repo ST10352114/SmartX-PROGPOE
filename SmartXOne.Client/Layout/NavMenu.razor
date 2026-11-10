@@ -18,19 +18,9 @@
         @foreach (var item in FeatureMenu.Items)
         {
             <div class="nav-item px-3">
-                @if (item.Enabled)
-                {
-                    <NavLink class="nav-link" href="@item.Href">
-                        <span class="bi bi-hdd-network-nav-menu" aria-hidden="true"></span> @item.Title
-                    </NavLink>
-                }
-                else
-                {
-                    <span class="nav-link disabled" aria-disabled="true" title="@item.StatusLabel">
-                        <span class="bi bi-hdd-network-nav-menu" aria-hidden="true"></span> @item.Title
-                        <span class="badge bg-secondary ms-1">@item.StatusLabel</span>
-                    </span>
-                }
+                <NavLink class="nav-link" href="@item.Href">
+                    <span class="bi bi-hdd-network-nav-menu" aria-hidden="true"></span> @item.Title
+                </NavLink>
             </div>
         }
     </nav>

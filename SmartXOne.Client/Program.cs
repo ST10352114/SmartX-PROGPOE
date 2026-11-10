@@ -25,5 +25,6 @@ builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(apiBaseUr
 builder.Services.AddScoped<SmartXApiClient>();
 builder.Services.AddScoped<ToastService>();
 builder.Services.AddScoped<CommandStreamState>();
+builder.Services.AddScoped<IngestionState>();
 
 await builder.Build().RunAsync();

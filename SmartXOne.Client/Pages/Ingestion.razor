@@ -2,6 +2,7 @@
 @using System.ComponentModel.DataAnnotations
 @implements IDisposable
 @inject SmartXApiClient Api
+@inject IngestionState State
 @inject ToastService Toasts
 @inject ILogger<Ingestion> Logger
 
@@ -10,12 +11,12 @@
 <h1>Sensor Data Ingestion and Telemetry</h1>
 <p class="lead">Register mesh sensors, ingest telemetry, attach files, and monitor live readings.</p>
 
-<ApiStatusBanner Error="@_loadError" IsOffline="@_offline"
+<ApiStatusBanner Error="@State.LoadError" IsOffline="@State.IsOffline"
                  Hint="Live refresh keeps retrying every few seconds."
-                 OnRetry="RefreshSensorsAsync" />
+                 OnRetry="State.RefreshAsync" />
 
-<LiveDashboard Sensors="_sensors" OpenIssueCount="_openIssueCount" />
-<AnomalySpotlightCard Sensors="_sensors" />
+<LiveDashboard Sensors="State.Sensors" OpenIssueCount="State.OpenIssueCount" />
+<AnomalySpotlightCard Sensors="State.Sensors" />
 
 <div class="row g-4">
     <div class="col-12 col-lg-5">
@@ -76,22 +77,22 @@
                     the table below has live data without real hardware.
                 </p>
                 <div class="d-flex gap-3 align-items-center flex-wrap">
-                    <button class="btn btn-outline-primary" @onclick="GenerateOnceAsync" disabled="@(_sensors.Count == 0 || _generating)">
+                    <button class="btn btn-outline-primary" @onclick="State.GenerateOnceAsync" disabled="@(State.Sensors.Count == 0 || State.Generating)">
                         Generate one round now
                     </button>
                     <div class="form-check form-switch mb-0">
-                        <input class="form-check-input" type="checkbox" id="autoSim" @bind="_autoSimulate" @bind:after="OnAutoSimulateChanged" />
+                        <input class="form-check-input" type="checkbox" id="autoSim" checked="@State.AutoSimulate" @onchange="OnAutoSimulateChanged" />
                         <label class="form-check-label" for="autoSim">Auto-generate every 5s</label>
                     </div>
-                    @if (_generating)
+                    @if (State.Generating)
                     {
                         <span class="text-body-secondary"><em>Posting readings&hellip;</em></span>
                     }
                 </div>
 
-                @if (_simulateError is not null)
+                @if (State.SimulateError is not null)
                 {
-                    <div class="alert alert-warning mt-3 py-2 mb-0">@_simulateError</div>
+                    <div class="alert alert-warning mt-3 py-2 mb-0">@State.SimulateError</div>
                 }
             </div>
         </div>
@@ -101,7 +102,7 @@
 <div class="card mt-4">
     <div class="card-header">Attach a file to a sensor</div>
     <div class="card-body">
-        @if (_sensors.Count == 0)
+        @if (State.Sensors.Count == 0)
         {
             <p class="text-body-secondary mb-0">Register a sensor first.</p>
         }
@@ -111,7 +112,7 @@
                 <div class="col-12 col-md-6">
                     <label class="form-label">Sensor</label>
                     <select class="form-select" @bind="_uploadSensorId" disabled="@_uploading">
-                        @foreach (var sensor in _sensors)
+                        @foreach (var sensor in State.Sensors)
                         {
                             <option value="@sensor.SensorId">@sensor.SensorId@(sensor.DisplayName is null ? "" : $" ({sensor.DisplayName})")</option>
                         }
@@ -160,26 +161,26 @@
     </div>
 </div>
 
-<IssuesPanel Sensors="_sensors" />
+<IssuesPanel Sensors="State.Sensors" />
 
 <div class="card mt-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Registered sensors</span>
-        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshSensorsAsync">Refresh</button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="State.RefreshAsync">Refresh</button>
     </div>
     <div class="card-body">
-        @if (_initialLoading)
+        @if (!State.HasLoadedOnce)
         {
             <div class="d-flex align-items-center gap-2 text-body-secondary">
                 <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 <span>Loading sensors&hellip;</span>
             </div>
         }
-        else if (_loadError is not null && _sensors.Count == 0)
+        else if (State.LoadError is not null && State.Sensors.Count == 0)
         {
             <p class="text-body-secondary mb-0"><em>Sensors can't be listed until the gateway responds.</em></p>
         }
-        else if (_sensors.Count == 0)
+        else if (State.Sensors.Count == 0)
         {
             <p class="text-body-secondary mb-0"><em>No sensors registered yet.</em></p>
         }
@@ -200,7 +201,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var sensor in _sensors)
+                        @foreach (var sensor in State.Sensors)
                         {
                             <tr>
                                 <td>@sensor.SensorId</td>
@@ -280,23 +281,10 @@
     private static readonly string[] KnownDeploymentNodeIds = ["NODE-A3-07", "NODE-A3-08", "NODE-B1-01"];
 
     private readonly RegisterSensorForm _registerForm = new();
-    private List<SensorSummary> _sensors = [];
-    private string? _loadError;
-    private bool _offline;
-    private bool _initialLoading = true;
 
     private bool _registering;
     private bool _registerSuccess;
     private string? _registerMessage;
-
-    private bool _generating;
-    private string? _simulateError;
-    private bool _autoSimulate;
-    private CancellationTokenSource? _autoSimulateCts;
-    private bool _disposed;
-
-    private int _openIssueCount;
-    private CancellationTokenSource? _liveRefreshCts;
 
     private string? _uploadSensorId;
     private bool _uploading;
@@ -310,73 +298,29 @@
     private bool _historyLoading;
     private List<TelemetryReadingDto> _history = [];
 
-    protected override Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync()
     {
-        var cts = new CancellationTokenSource();
-        _liveRefreshCts = cts;
-        _ = LiveRefreshLoopAsync(cts.Token);
-        return RefreshSensorsAsync();
-    }
-
-    private async Task RefreshSensorsAsync()
-    {
+        // Sensors, the live refresh and the auto-generate toggle live in the
+        // scoped IngestionState, so returning to this page picks up where it
+        // left off instead of starting from an empty list.
+        State.Changed += OnStateChanged;
         try
         {
-            // Keep the last good list on failure so the page doesn't go blank.
-            _sensors = await Api.GetSensorsAsync();
-            _uploadSensorId ??= _sensors.FirstOrDefault()?.SensorId;
-
-            var openIssues = await Api.GetIssuesAsync(status: IssueStatus.Open);
-            _openIssueCount = openIssues.Count;
-            _loadError = null;
-            _offline = false;
-        }
-        catch (ApiException ex)
-        {
-            _loadError = ex.Message;
-            _offline = ex.IsOffline;
+            await State.EnsureStartedAsync();
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Refreshing the sensor list failed.");
-            _loadError = $"Couldn't refresh sensors: {ex.Message}";
-            _offline = false;
+            Logger.LogError(ex, "Starting the ingestion live refresh failed.");
+            Toasts.Show($"Live refresh couldn't start: {ex.Message}", ToastLevel.Danger);
         }
-        finally
-        {
-            _initialLoading = false;
-        }
+
+        _uploadSensorId ??= State.Sensors.FirstOrDefault()?.SensorId;
     }
 
-    /// <summary>
-    /// Keeps the dashboard live without a page reload, independently of the
-    /// "auto-generate telemetry" toggle below - this is the standing
-    /// auto-refresh the engagement feature needs to actually look alive.
-    /// </summary>
-    private async Task LiveRefreshLoopAsync(CancellationToken ct)
+    private void OnStateChanged()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(4));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                await RefreshSensorsAsync();
-                if (!_disposed)
-                {
-                    await InvokeAsync(StateHasChanged);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Page navigated away - expected.
-        }
-        catch (Exception ex)
-        {
-            // Fire-and-forget loop: log so the failure isn't unobserved.
-            Logger.LogError(ex, "Ingestion live refresh loop stopped unexpectedly.");
-            _loadError = "Live refresh stopped unexpectedly. Reload the page to restart it.";
-        }
+        _uploadSensorId ??= State.Sensors.FirstOrDefault()?.SensorId;
+        InvokeAsync(StateHasChanged);
     }
 
     private async Task RegisterSensorAsync()
@@ -399,7 +343,7 @@
             if (result.Success)
             {
                 _registerForm.Reset();
-                await RefreshSensorsAsync();
+                await State.RefreshAsync();
             }
         }
         catch (Exception ex)
@@ -415,74 +359,16 @@
         }
     }
 
-    private async Task GenerateOnceAsync()
+    private void OnAutoSimulateChanged(ChangeEventArgs e)
     {
-        _generating = true;
-        _simulateError = null;
         try
         {
-            // Snapshot the list: a live refresh can replace _sensors mid-loop.
-            foreach (var sensor in _sensors.ToList())
-            {
-                var value = MockTelemetryGenerator.NextValue(sensor.Category, sensor.LatestReading);
-                var result = await Api.SubmitReadingAsync(sensor.SensorId, value, unit: null);
-                if (!result.Success)
-                {
-                    _simulateError = $"{sensor.SensorId}: {result.Error}";
-                }
-            }
-
-            await RefreshSensorsAsync();
+            State.SetAutoSimulate(e.Value is true);
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Generating simulated telemetry failed.");
-            _simulateError = $"Simulation failed: {ex.Message}";
-        }
-        finally
-        {
-            _generating = false;
-        }
-    }
-
-    private void OnAutoSimulateChanged()
-    {
-        _autoSimulateCts?.Cancel();
-        _autoSimulateCts = null;
-
-        if (!_autoSimulate)
-        {
-            return;
-        }
-
-        var cts = new CancellationTokenSource();
-        _autoSimulateCts = cts;
-        _ = AutoSimulateLoopAsync(cts.Token);
-    }
-
-    private async Task AutoSimulateLoopAsync(CancellationToken ct)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                await GenerateOnceAsync();
-                if (!_disposed)
-                {
-                    await InvokeAsync(StateHasChanged);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Stopped via the toggle or page navigation - expected.
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Auto-simulate loop stopped unexpectedly.");
-            _autoSimulate = false;
-            _simulateError = $"Auto-generate stopped: {ex.Message}";
+            Logger.LogError(ex, "Toggling auto-generate failed.");
+            Toasts.Show($"Couldn't change auto-generate: {ex.Message}", ToastLevel.Danger);
         }
     }
 
@@ -516,7 +402,7 @@
 
             if (result.Success)
             {
-                await RefreshSensorsAsync();
+                await State.RefreshAsync();
             }
         }
         catch (Exception ex)
@@ -599,10 +485,10 @@
 
     public void Dispose()
     {
-        _disposed = true;
-        _autoSimulateCts?.Cancel();
+        // Only unsubscribe: the refresh and auto-generate loops belong to
+        // IngestionState and keep running while the user is on another page.
+        State.Changed -= OnStateChanged;
         _uploadCts?.Cancel();
-        _liveRefreshCts?.Cancel();
     }
 
     private sealed class RegisterSensorForm
