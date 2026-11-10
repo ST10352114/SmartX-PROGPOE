@@ -3,6 +3,7 @@
 @inject SmartXApiClient Api
 @inject CommandStreamState State
 @inject ToastService Toasts
+@inject ILogger<CommandStream> Logger
 
 <PageTitle>Real-Time Command Stream and History</PageTitle>
 
@@ -12,16 +13,9 @@
     and the command history behind them.
 </p>
 
-@if (State.LoadError is not null)
-{
-    <div class="alert alert-warning d-flex justify-content-between align-items-center">
-        <span>
-            <strong>Could not reach the gateway.</strong> @State.LoadError
-            &mdash; showing the last data received; retrying automatically every few seconds.
-        </span>
-        <button class="btn btn-sm btn-outline-warning" @onclick="State.RefreshAsync">Retry now</button>
-    </div>
-}
+<ApiStatusBanner Error="@State.LoadError" IsOffline="@State.IsOffline"
+                 Hint="Showing the last data received; retrying automatically every few seconds."
+                 OnRetry="State.RefreshAsync" />
 
 @if (!State.HasLoadedOnce)
 {
@@ -265,6 +259,12 @@ else
         {
             // Superseded by a newer keystroke - expected.
         }
+        catch (Exception ex)
+        {
+            // Search logging is best-effort and invisible to the user, so a
+            // failure is recorded in the console rather than shown as a toast.
+            Logger.LogWarning(ex, "Logging search '{Term}' failed.", _search);
+        }
     }
 
     private async Task IssueAsync(string deviceId, DeviceCommandType type)
@@ -277,6 +277,11 @@ else
                 result.Success ? $"{deviceId}: {CommandLabel(type)} applied." : result.Error ?? "Command failed.",
                 result.Success ? ToastLevel.Success : ToastLevel.Danger);
             await State.RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Issuing {Command} to {DeviceId} failed.", type, deviceId);
+            Toasts.Show($"{deviceId}: {CommandLabel(type)} failed - {ex.Message}", ToastLevel.Danger);
         }
         finally
         {
@@ -294,6 +299,11 @@ else
                 result.Success ? ToastLevel.Warning : ToastLevel.Danger);
             await State.RefreshAsync();
         }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Shut all valves failed.");
+            Toasts.Show($"Shut all valves failed - {ex.Message}", ToastLevel.Danger);
+        }
         finally
         {
             _actionBusy = false;
@@ -307,11 +317,16 @@ else
         {
             var result = await Api.UndoCommandAsync();
             Toasts.Show(
-                result.Success
-                    ? $"Undid {CommandLabel(result.Value!.UndoneType)} - {result.Value.RestoredStates.Count} device(s) restored."
+                result is { Success: true, Value: { } undo }
+                    ? $"Undid {CommandLabel(undo.UndoneType)} - {undo.RestoredStates.Count} device(s) restored."
                     : result.Error ?? "Nothing to undo.",
                 result.Success ? ToastLevel.Info : ToastLevel.Warning);
             await State.RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Undo failed.");
+            Toasts.Show($"Undo failed - {ex.Message}", ToastLevel.Danger);
         }
         finally
         {
@@ -334,6 +349,17 @@ else
         try
         {
             _timelinePoints = await Api.GetDeviceTimelineAsync(deviceId);
+        }
+        catch (ApiException ex)
+        {
+            _expandedDeviceId = null;
+            Toasts.Show(ex.Message, ex.IsOffline ? ToastLevel.Danger : ToastLevel.Warning);
+        }
+        catch (Exception ex)
+        {
+            _expandedDeviceId = null;
+            Logger.LogError(ex, "Loading the timeline for {DeviceId} failed.", deviceId);
+            Toasts.Show($"Couldn't load the timeline for {deviceId}: {ex.Message}", ToastLevel.Danger);
         }
         finally
         {

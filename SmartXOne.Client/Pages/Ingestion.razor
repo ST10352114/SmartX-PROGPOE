@@ -3,11 +3,16 @@
 @implements IDisposable
 @inject SmartXApiClient Api
 @inject ToastService Toasts
+@inject ILogger<Ingestion> Logger
 
 <PageTitle>Sensor Data Ingestion and Telemetry</PageTitle>
 
 <h1>Sensor Data Ingestion and Telemetry</h1>
 <p class="lead">Register mesh sensors, ingest telemetry, attach files, and monitor live readings.</p>
+
+<ApiStatusBanner Error="@_loadError" IsOffline="@_offline"
+                 Hint="Live refresh keeps retrying every few seconds."
+                 OnRetry="RefreshSensorsAsync" />
 
 <LiveDashboard Sensors="_sensors" OpenIssueCount="_openIssueCount" />
 <AnomalySpotlightCard Sensors="_sensors" />
@@ -170,9 +175,9 @@
                 <span>Loading sensors&hellip;</span>
             </div>
         }
-        else if (_loadError is not null)
+        else if (_loadError is not null && _sensors.Count == 0)
         {
-            <div class="alert alert-danger py-2 mb-0">@_loadError</div>
+            <p class="text-body-secondary mb-0"><em>Sensors can't be listed until the gateway responds.</em></p>
         }
         else if (_sensors.Count == 0)
         {
@@ -277,6 +282,7 @@
     private readonly RegisterSensorForm _registerForm = new();
     private List<SensorSummary> _sensors = [];
     private string? _loadError;
+    private bool _offline;
     private bool _initialLoading = true;
 
     private bool _registering;
@@ -314,18 +320,27 @@
 
     private async Task RefreshSensorsAsync()
     {
-        _loadError = null;
         try
         {
+            // Keep the last good list on failure so the page doesn't go blank.
             _sensors = await Api.GetSensorsAsync();
             _uploadSensorId ??= _sensors.FirstOrDefault()?.SensorId;
 
             var openIssues = await Api.GetIssuesAsync(status: IssueStatus.Open);
             _openIssueCount = openIssues.Count;
+            _loadError = null;
+            _offline = false;
+        }
+        catch (ApiException ex)
+        {
+            _loadError = ex.Message;
+            _offline = ex.IsOffline;
         }
         catch (Exception ex)
         {
-            _loadError = ex.Message;
+            Logger.LogError(ex, "Refreshing the sensor list failed.");
+            _loadError = $"Couldn't refresh sensors: {ex.Message}";
+            _offline = false;
         }
         finally
         {
@@ -356,6 +371,12 @@
         {
             // Page navigated away - expected.
         }
+        catch (Exception ex)
+        {
+            // Fire-and-forget loop: log so the failure isn't unobserved.
+            Logger.LogError(ex, "Ingestion live refresh loop stopped unexpectedly.");
+            _loadError = "Live refresh stopped unexpectedly. Reload the page to restart it.";
+        }
     }
 
     private async Task RegisterSensorAsync()
@@ -381,6 +402,13 @@
                 await RefreshSensorsAsync();
             }
         }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Registering sensor '{SensorId}' failed.", _registerForm.SensorId);
+            _registerSuccess = false;
+            _registerMessage = $"Registration failed: {ex.Message}";
+            Toasts.Show(_registerMessage, ToastLevel.Danger);
+        }
         finally
         {
             _registering = false;
@@ -393,7 +421,8 @@
         _simulateError = null;
         try
         {
-            foreach (var sensor in _sensors)
+            // Snapshot the list: a live refresh can replace _sensors mid-loop.
+            foreach (var sensor in _sensors.ToList())
             {
                 var value = MockTelemetryGenerator.NextValue(sensor.Category, sensor.LatestReading);
                 var result = await Api.SubmitReadingAsync(sensor.SensorId, value, unit: null);
@@ -404,6 +433,11 @@
             }
 
             await RefreshSensorsAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Generating simulated telemetry failed.");
+            _simulateError = $"Simulation failed: {ex.Message}";
         }
         finally
         {
@@ -444,6 +478,12 @@
         {
             // Stopped via the toggle or page navigation - expected.
         }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Auto-simulate loop stopped unexpectedly.");
+            _autoSimulate = false;
+            _simulateError = $"Auto-generate stopped: {ex.Message}";
+        }
     }
 
     private async Task UploadProfileAsync(InputFileChangeEventArgs args)
@@ -478,6 +518,13 @@
             {
                 await RefreshSensorsAsync();
             }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Uploading '{FileName}' failed.", args.File.Name);
+            _uploadSuccess = false;
+            _uploadMessage = $"Upload failed: {ex.Message}";
+            Toasts.Show(_uploadMessage, ToastLevel.Danger);
         }
         finally
         {
@@ -516,6 +563,17 @@
         try
         {
             _history = await Api.GetSensorHistoryAsync(sensorId);
+        }
+        catch (ApiException ex)
+        {
+            _expandedSensorId = null;
+            Toasts.Show(ex.Message, ex.IsOffline ? ToastLevel.Danger : ToastLevel.Warning);
+        }
+        catch (Exception ex)
+        {
+            _expandedSensorId = null;
+            Logger.LogError(ex, "Loading history for {SensorId} failed.", sensorId);
+            Toasts.Show($"Couldn't load history for {sensorId}: {ex.Message}", ToastLevel.Danger);
         }
         finally
         {

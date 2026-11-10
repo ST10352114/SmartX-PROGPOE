@@ -4,6 +4,7 @@
 @using System.ComponentModel.DataAnnotations
 @inject SmartXApiClient Api
 @inject ToastService Toasts
+@inject ILogger<IssuesPanel> Logger
 
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -68,6 +69,8 @@
 
         <hr />
 
+        <ApiStatusBanner Error="@_loadError" IsOffline="@_offline" OnRetry="RefreshAsync" />
+
         @if (_loading)
         {
             <div class="d-flex align-items-center gap-2 text-body-secondary">
@@ -119,6 +122,8 @@
     private string _filterSeverity = "";
     private string _filterStatus = "";
     private bool _loading;
+    private string? _loadError;
+    private bool _offline;
     private bool _submitting;
     private string? _submitError;
 
@@ -132,6 +137,20 @@
             IssueSeverity? severity = Enum.TryParse<IssueSeverity>(_filterSeverity, out var sev) ? sev : null;
             IssueStatus? status = Enum.TryParse<IssueStatus>(_filterStatus, out var stat) ? stat : null;
             _issues = await Api.GetIssuesAsync(status, severity);
+            _loadError = null;
+            _offline = false;
+        }
+        catch (ApiException ex)
+        {
+            // Keep the last list on screen; the banner explains why it's stale.
+            _loadError = ex.Message;
+            _offline = ex.IsOffline;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Loading issues failed.");
+            _loadError = $"Couldn't load issues: {ex.Message}";
+            _offline = false;
         }
         finally
         {
@@ -163,6 +182,12 @@
                 Toasts.Show(result.Error ?? "Failed to report issue.", ToastLevel.Danger);
             }
         }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Reporting an issue failed.");
+            _submitError = $"Couldn't report the issue: {ex.Message}";
+            Toasts.Show(_submitError, ToastLevel.Danger);
+        }
         finally
         {
             _submitting = false;
@@ -171,18 +196,34 @@
 
     private async Task AcknowledgeAsync(string id)
     {
-        var result = await Api.AcknowledgeIssueAsync(id);
-        Toasts.Show(result.Success ? "Issue acknowledged." : result.Error ?? "Failed to acknowledge issue.",
-            result.Success ? ToastLevel.Info : ToastLevel.Danger);
-        await RefreshAsync();
+        try
+        {
+            var result = await Api.AcknowledgeIssueAsync(id);
+            Toasts.Show(result.Success ? "Issue acknowledged." : result.Error ?? "Failed to acknowledge issue.",
+                result.Success ? ToastLevel.Info : ToastLevel.Danger);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Acknowledging issue {IssueId} failed.", id);
+            Toasts.Show($"Couldn't acknowledge the issue: {ex.Message}", ToastLevel.Danger);
+        }
     }
 
     private async Task ResolveAsync(string id)
     {
-        var result = await Api.ResolveIssueAsync(id);
-        Toasts.Show(result.Success ? "Issue resolved." : result.Error ?? "Failed to resolve issue.",
-            result.Success ? ToastLevel.Success : ToastLevel.Danger);
-        await RefreshAsync();
+        try
+        {
+            var result = await Api.ResolveIssueAsync(id);
+            Toasts.Show(result.Success ? "Issue resolved." : result.Error ?? "Failed to resolve issue.",
+                result.Success ? ToastLevel.Success : ToastLevel.Danger);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Resolving issue {IssueId} failed.", id);
+            Toasts.Show($"Couldn't resolve the issue: {ex.Message}", ToastLevel.Danger);
+        }
     }
 
     private static string SeverityClass(IssueSeverity severity) => severity switch

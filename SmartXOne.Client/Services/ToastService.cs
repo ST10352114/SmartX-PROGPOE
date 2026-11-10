@@ -18,11 +18,25 @@ public sealed record ToastMessage(int Id, string Text, ToastLevel Level);
 /// alert band - appears in the same place with the same look, instead of
 /// each component building its own toast UI.
 /// </summary>
-public sealed class ToastService
+public sealed class ToastService(ILogger<ToastService> logger)
 {
     private int _nextId;
 
     public event Action<ToastMessage>? OnShow;
 
-    public void Show(string text, ToastLevel level = ToastLevel.Info) => OnShow?.Invoke(new ToastMessage(++_nextId, text, level));
+    /// <summary>
+    /// Raises a toast. Never throws: it's usually called from inside another
+    /// component's catch block, where a second failure would hide the first.
+    /// </summary>
+    public void Show(string text, ToastLevel level = ToastLevel.Info)
+    {
+        try
+        {
+            OnShow?.Invoke(new ToastMessage(++_nextId, text, level));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Toast host failed to show '{Text}' ({Level}).", text, level);
+        }
+    }
 }

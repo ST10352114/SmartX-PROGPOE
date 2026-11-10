@@ -1,6 +1,7 @@
 ﻿@page "/"
 @inject NavigationManager Nav
 @inject SmartXOne.Client.Services.SmartXApiClient Api
+@inject ILogger<Home> Logger
 
 <PageTitle>Smart-X Gateway</PageTitle>
 
@@ -52,10 +53,9 @@
 <h2 class="h5">Gateway connectivity</h2>
 @if (_error is not null)
 {
-    <div class="alert alert-danger py-2">
-        <strong>API unreachable.</strong> @_error
-        <button class="btn btn-sm btn-outline-danger ms-2" @onclick="LoadAsync">Retry</button>
-    </div>
+    <ApiStatusBanner Error="@_error" IsOffline="@_offline"
+                     Hint="The dashboards still open, but show no live data until the gateway is running."
+                     OnRetry="LoadAsync" />
 }
 else if (_info is null)
 {
@@ -75,20 +75,28 @@ else
 @code {
     private GatewayInfo? _info;
     private string? _error;
+    private bool _offline;
 
     protected override Task OnInitializedAsync() => LoadAsync();
 
     private async Task LoadAsync()
     {
         _error = null;
+        _offline = false;
         _info = null;
         try
         {
             _info = await Api.GetGatewayInfoAsync();
         }
-        catch (Exception ex)
+        catch (ApiException ex)
         {
             _error = ex.Message;
+            _offline = ex.IsOffline;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Loading gateway info failed.");
+            _error = $"Couldn't read the gateway status: {ex.Message}";
         }
     }
 }

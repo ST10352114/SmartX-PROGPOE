@@ -1,0 +1,63 @@
+@* Shared "gateway offline / request failed" banner, so every page reports an
+   unreachable API the same way: what went wrong, that the page is still
+   usable, and a Retry button wired to that page's own reload. *@
+@inject ILogger<ApiStatusBanner> Logger
+
+@if (Error is not null)
+{
+    <div class="alert @(IsOffline ? "alert-danger" : "alert-warning") d-flex justify-content-between align-items-center gap-2 flex-wrap" role="alert">
+        <span>
+            <strong>@(IsOffline ? "Gateway API offline." : "Couldn't load the latest data.")</strong>
+            @Error
+            @if (!string.IsNullOrEmpty(Hint))
+            {
+                <span class="d-block small">@Hint</span>
+            }
+        </span>
+        @if (OnRetry.HasDelegate)
+        {
+            <button class="btn btn-sm @(IsOffline ? "btn-outline-danger" : "btn-outline-warning")" disabled="@_retrying" @onclick="RetryAsync">
+                @(_retrying ? "Retrying..." : "Retry now")
+            </button>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The message to show; the banner renders nothing while this is <c>null</c>.</summary>
+    [Parameter]
+    public string? Error { get; set; }
+
+    /// <summary><c>true</c> when the gateway couldn't be reached at all (red), rather than answering with an error (amber).</summary>
+    [Parameter]
+    public bool IsOffline { get; set; }
+
+    /// <summary>Optional second line, e.g. "showing the last data received".</summary>
+    [Parameter]
+    public string? Hint { get; set; }
+
+    /// <summary>The page's own reload; omit to hide the Retry button.</summary>
+    [Parameter]
+    public EventCallback OnRetry { get; set; }
+
+    private bool _retrying;
+
+    private async Task RetryAsync()
+    {
+        _retrying = true;
+        try
+        {
+            await OnRetry.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            // The page's reload normally handles its own failures; this only
+            // catches one that slipped through so the button never crashes the page.
+            Logger.LogError(ex, "Retry handler threw.");
+        }
+        finally
+        {
+            _retrying = false;
+        }
+    }
+}

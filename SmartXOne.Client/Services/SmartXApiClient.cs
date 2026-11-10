@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -15,13 +16,47 @@ public sealed record ApiResult<T>(bool Success, T? Value, string? Error)
 }
 
 /// <summary>
+/// The one exception type every read in <see cref="SmartXApiClient"/> throws,
+/// whatever actually went wrong underneath (network failure, timeout, a 4xx/5xx
+/// ProblemDetails reply, or a body that wasn't the expected JSON). Pages catch
+/// this, show <see cref="Exception.Message"/> (always written for a person to
+/// read), and use <see cref="IsOffline"/> to decide between an "API offline"
+/// banner and an ordinary error.
+/// </summary>
+public sealed class ApiException(string message, HttpStatusCode? statusCode, Exception? innerException = null)
+    : Exception(message, innerException)
+{
+    /// <summary>The HTTP status the gateway answered with, or <c>null</c> if it never answered.</summary>
+    public HttpStatusCode? StatusCode { get; } = statusCode;
+
+    /// <summary><c>true</c> when the gateway couldn't be reached at all (not started, crashed, network down).</summary>
+    public bool IsOffline => StatusCode is null;
+}
+
+// Code Attribution
+// Purpose: Distinguishing HttpRequestException (unreachable / non-success),
+//          TaskCanceledException caused by HttpClient.Timeout, and caller
+//          cancellation when handling HttpClient failures.
+// Author: Microsoft
+// Title: Make HTTP requests with the HttpClient - .NET
+// Year: 2026
+// URL/DOI: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient
+// Accessed: 10 November 2026
+
+/// <summary>
 /// Thin typed wrapper around <see cref="HttpClient"/> for talking to the gateway API.
 /// Every page/component calls the API through this class instead of using HttpClient
-/// directly, so the endpoint URLs and (de)serialisation live in one place.
+/// directly, so the endpoint URLs, (de)serialisation and error handling live in one
+/// place: reads throw <see cref="ApiException"/>, writes return an
+/// <see cref="ApiResult{T}"/>, and neither ever lets a raw transport exception
+/// reach a component.
 /// </summary>
-public sealed class SmartXApiClient(HttpClient http)
+public sealed class SmartXApiClient(HttpClient http, ILogger<SmartXApiClient> logger)
 {
     private const long MaxProfileFileBytes = 20 * 1024 * 1024;
+
+    /// <summary>Shown whenever the gateway can't be reached at all.</summary>
+    public const string OfflineMessage = "The gateway API is offline or unreachable. Start SmartXOne.Api (http://localhost:5080) and try again.";
 
     private readonly HttpClient _http = http;
 
@@ -31,16 +66,19 @@ public sealed class SmartXApiClient(HttpClient http)
     /// <summary>
     /// Phase 1 round-trip check: fetch the gateway identity/health payload.
     /// </summary>
-    public async Task<GatewayInfo?> GetGatewayInfoAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<GatewayInfo>("api/gateway/info", ct);
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<GatewayInfo> GetGatewayInfoAsync(CancellationToken ct = default)
+        => GetAsync<GatewayInfo>("api/gateway/info", "Contacting the gateway", ct);
 
-    public async Task<List<SensorSummary>> GetSensorsAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<SensorSummary>>("api/sensors", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<SensorSummary>> GetSensorsAsync(CancellationToken ct = default)
+        => GetAsync<List<SensorSummary>>("api/sensors", "Loading sensors", ct);
 
     /// <summary>A sensor's stored reading history, oldest first (see <c>SensorRepository.GetHistory</c>).</summary>
-    public async Task<List<TelemetryReadingDto>> GetSensorHistoryAsync(string sensorId, CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<TelemetryReadingDto>>(
-            $"api/sensors/{Uri.EscapeDataString(sensorId)}/history", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<TelemetryReadingDto>> GetSensorHistoryAsync(string sensorId, CancellationToken ct = default)
+        => GetAsync<List<TelemetryReadingDto>>(
+            $"api/sensors/{Uri.EscapeDataString(sensorId)}/history", $"Loading history for {sensorId}", ct);
 
     public Task<ApiResult<SensorSummary>> RegisterSensorAsync(RegisterSensorRequest request, CancellationToken ct = default)
         => PostForResultAsync<SensorSummary>("api/sensors", request, ct);
@@ -82,16 +120,19 @@ public sealed class SmartXApiClient(HttpClient http)
             streamContent.Headers.ContentLength = file.Size;
             content.Add(streamContent, name: "file", fileName: file.Name);
 
-            var response = await _http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/profile", content, ct);
+            using var response = await _http.PostAsync($"api/sensors/{Uri.EscapeDataString(sensorId)}/profile", content, ct);
             return await ToResultAsync<SensorSummary>(response, ct);
         }
-        catch (OperationCanceledException)
+        catch (IOException ex)
         {
-            return ApiResult<SensorSummary>.Fail("Upload cancelled.");
+            // IBrowserFile.OpenReadStream throws this when the file is larger
+            // than MaxProfileFileBytes, or the browser can't read it any more.
+            logger.LogWarning(ex, "Could not read {FileName} for upload to {SensorId}.", file.Name, sensorId);
+            return ApiResult<SensorSummary>.Fail($"Could not read '{file.Name}': {ex.Message}");
         }
         catch (Exception ex)
         {
-            return ApiResult<SensorSummary>.Fail(ex.Message);
+            return Fail<SensorSummary>(ex, $"Uploading {file.Name} for {sensorId}", ct);
         }
     }
 
@@ -99,50 +140,185 @@ public sealed class SmartXApiClient(HttpClient http)
     {
         try
         {
-            var response = await _http.PostAsJsonAsync(url, body, ct);
+            using var response = await _http.PostAsJsonAsync(url, body, ct);
             return await ToResultAsync<T>(response, ct);
         }
         catch (Exception ex)
         {
-            return ApiResult<T>.Fail(ex.Message);
+            return Fail<T>(ex, $"POST {url}", ct);
         }
     }
 
     /// <summary>
-    /// On success the gateway returns the requested payload as JSON; on a 4xx it
-    /// returns a plain JSON string (the error message) - see the
-    /// <c>Results.BadRequest("...")</c> / <c>Results.Conflict("...")</c> /
-    /// <c>Results.NotFound("...")</c> calls in <c>SensorEndpoints.cs</c>.
+    /// Turns a transport-level failure on a write into a readable
+    /// <see cref="ApiResult{T}"/> failure, most specific exception type first.
     /// </summary>
-    private static async Task<ApiResult<T>> ToResultAsync<T>(HttpResponseMessage response, CancellationToken ct)
+    private ApiResult<T> Fail<T>(Exception ex, string operation, CancellationToken ct)
+    {
+        switch (ex)
+        {
+            case OperationCanceledException when ct.IsCancellationRequested:
+                return ApiResult<T>.Fail("Cancelled.");
+
+            case TaskCanceledException:
+                // Not our token, so HttpClient.Timeout fired.
+                logger.LogWarning(ex, "{Operation} timed out.", operation);
+                return ApiResult<T>.Fail("The gateway did not respond in time. Please try again.");
+
+            case HttpRequestException:
+                logger.LogWarning(ex, "{Operation} failed: gateway unreachable.", operation);
+                return ApiResult<T>.Fail(OfflineMessage);
+
+            case JsonException or NotSupportedException:
+                logger.LogError(ex, "{Operation}: response was not in the expected format.", operation);
+                return ApiResult<T>.Fail("The gateway sent a response this page couldn't read.");
+
+            default:
+                logger.LogError(ex, "{Operation} failed unexpectedly.", operation);
+                return ApiResult<T>.Fail($"Something went wrong: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// On success the gateway returns the requested payload as JSON; on a 4xx/5xx
+    /// it returns an RFC 7807 ProblemDetails object (see <c>ApiProblem</c> in the
+    /// API) whose <c>detail</c> is the human-readable reason.
+    /// </summary>
+    private async Task<ApiResult<T>> ToResultAsync<T>(HttpResponseMessage response, CancellationToken ct)
     {
         if (response.IsSuccessStatusCode)
         {
-            var value = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct);
-            return value is null ? ApiResult<T>.Fail("Gateway returned an empty response.") : ApiResult<T>.Ok(value);
+            try
+            {
+                var value = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct);
+                return value is null ? ApiResult<T>.Fail("Gateway returned an empty response.") : ApiResult<T>.Ok(value);
+            }
+            catch (JsonException ex)
+            {
+                logger.LogError(ex, "Success response from {Url} wasn't valid JSON for {Type}.", response.RequestMessage?.RequestUri, typeof(T).Name);
+                return ApiResult<T>.Fail("The gateway sent a response this page couldn't read.");
+            }
         }
 
-        string? error;
+        return ApiResult<T>.Fail(await ReadErrorAsync(response, ct));
+    }
+
+    /// <summary>
+    /// Pulls the most useful message out of an error response: ProblemDetails
+    /// <c>detail</c>, then <c>title</c>, then a plain JSON string, and finally
+    /// the bare status line if the body is none of those.
+    /// </summary>
+    private async Task<string> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var fallback = $"Request failed ({(int)response.StatusCode} {response.ReasonPhrase}).";
+
         try
         {
-            error = await response.Content.ReadFromJsonAsync<string>(cancellationToken: ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return fallback;
+            }
+
+            using var json = JsonDocument.Parse(body);
+            var root = json.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                return root.GetString() ?? fallback;
+            }
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String)
+                {
+                    return detail.GetString() ?? fallback;
+                }
+
+                if (root.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+                {
+                    return title.GetString() ?? fallback;
+                }
+            }
+
+            return fallback;
         }
         catch (JsonException)
         {
-            error = null;
+            return fallback; // body wasn't JSON (e.g. a proxy's HTML error page)
         }
-
-        return ApiResult<T>.Fail(error ?? $"Request failed ({(int)response.StatusCode} {response.ReasonPhrase}).");
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            logger.LogWarning(ex, "Could not read the error body for {Status}.", (int)response.StatusCode);
+            return fallback;
+        }
     }
 
-    public async Task<List<IssueDto>> GetIssuesAsync(IssueStatus? status = null, IssueSeverity? severity = null, CancellationToken ct = default)
+    /// <summary>
+    /// Shared GET path for every read: success deserialises to <typeparamref name="T"/>,
+    /// anything else becomes an <see cref="ApiException"/> with a readable message.
+    /// Caller cancellation is the one exception left as-is, so a component being
+    /// disposed mid-request doesn't show an error for something nobody is waiting on.
+    /// </summary>
+    private async Task<T> GetAsync<T>(string url, string operation, CancellationToken ct)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.GetAsync(url, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            logger.LogWarning(ex, "{Operation} timed out.", operation);
+            throw new ApiException($"{operation}: the gateway did not respond in time.", HttpStatusCode.RequestTimeout, ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(ex, "{Operation} failed: gateway unreachable.", operation);
+            throw new ApiException(OfflineMessage, statusCode: null, ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await ReadErrorAsync(response, ct);
+                logger.LogWarning("{Operation} failed with {Status}: {Error}", operation, (int)response.StatusCode, error);
+                throw new ApiException($"{operation}: {error}", response.StatusCode);
+            }
+
+            try
+            {
+                return await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct)
+                    ?? throw new ApiException($"{operation}: the gateway returned an empty response.", response.StatusCode);
+            }
+            catch (JsonException ex)
+            {
+                logger.LogError(ex, "{Operation}: response was not valid JSON for {Type}.", operation, typeof(T).Name);
+                throw new ApiException($"{operation}: the gateway sent data this page couldn't read.", response.StatusCode, ex);
+            }
+            catch (NotSupportedException ex)
+            {
+                // Content-Type wasn't JSON at all.
+                logger.LogError(ex, "{Operation}: response had an unsupported content type.", operation);
+                throw new ApiException($"{operation}: the gateway sent data this page couldn't read.", response.StatusCode, ex);
+            }
+        }
+    }
+
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<IssueDto>> GetIssuesAsync(IssueStatus? status = null, IssueSeverity? severity = null, CancellationToken ct = default)
     {
         var query = new List<string>();
         if (status is { } s) query.Add($"status={s}");
         if (severity is { } sev) query.Add($"severity={sev}");
         var url = "api/issues" + (query.Count > 0 ? "?" + string.Join('&', query) : "");
 
-        return await _http.GetFromJsonAsync<List<IssueDto>>(url, ct) ?? [];
+        return GetAsync<List<IssueDto>>(url, "Loading issues", ct);
     }
 
     public Task<ApiResult<IssueDto>> CreateIssueAsync(CreateIssueRequest request, CancellationToken ct = default)
@@ -156,18 +332,22 @@ public sealed class SmartXApiClient(HttpClient http)
 
     // --- Part 2: Real-Time Command Stream ---------------------------------
 
-    public async Task<List<DeviceDto>> GetRealtimeDevicesAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<DeviceDto>>("api/realtime/devices", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<DeviceDto>> GetRealtimeDevicesAsync(CancellationToken ct = default)
+        => GetAsync<List<DeviceDto>>("api/realtime/devices", "Loading devices", ct);
 
-    public async Task<List<TelemetryPointDto>> GetDeviceTimelineAsync(string deviceId, CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<TelemetryPointDto>>(
-            $"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/timeline", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<TelemetryPointDto>> GetDeviceTimelineAsync(string deviceId, CancellationToken ct = default)
+        => GetAsync<List<TelemetryPointDto>>(
+            $"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/timeline", $"Loading the timeline for {deviceId}", ct);
 
-    public async Task<List<DeviceCommandDto>> GetRecentCommandsAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<DeviceCommandDto>>("api/realtime/commands", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<DeviceCommandDto>> GetRecentCommandsAsync(CancellationToken ct = default)
+        => GetAsync<List<DeviceCommandDto>>("api/realtime/commands", "Loading command history", ct);
 
-    public async Task<QueueStatusDto?> GetQueueStatusAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<QueueStatusDto>("api/realtime/queue-status", ct);
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<QueueStatusDto> GetQueueStatusAsync(CancellationToken ct = default)
+        => GetAsync<QueueStatusDto>("api/realtime/queue-status", "Loading queue status", ct);
 
     public Task<ApiResult<DeviceDto>> IssueCommandAsync(string deviceId, DeviceCommandType type, CancellationToken ct = default)
         => PostForResultAsync<DeviceDto>($"api/realtime/devices/{Uri.EscapeDataString(deviceId)}/commands", new IssueCommandRequest(type), ct);
@@ -183,8 +363,9 @@ public sealed class SmartXApiClient(HttpClient http)
 
     // --- Part 2: Predictive Action / Recommendation Engine ----------------
 
-    public async Task<List<SuggestionDto>> GetSuggestionsAsync(CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<List<SuggestionDto>>("api/recommendations/suggestions", ct) ?? [];
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<SuggestionDto>> GetSuggestionsAsync(CancellationToken ct = default)
+        => GetAsync<List<SuggestionDto>>("api/recommendations/suggestions", "Loading suggestions", ct);
 
     /// <summary>
     /// Call this debounced (not on every keystroke) - each call is one "search"
@@ -192,17 +373,30 @@ public sealed class SmartXApiClient(HttpClient http)
     /// (the endpoint returns 202 with no body, and a failed log shouldn't
     /// interrupt the UI), so this doesn't go through PostForResultAsync/
     /// ApiResult&lt;T&gt; like the rest of this class - there's nothing meaningful
-    /// to parse from an empty Accepted response.
+    /// to parse from an empty Accepted response. A failure is still logged to
+    /// the browser console, just not shown to the user.
     /// </summary>
     public async Task LogSearchAsync(string term, CancellationToken ct = default)
     {
         try
         {
-            await _http.PostAsJsonAsync("api/recommendations/events/search", new LogSearchRequest(term), ct);
+            using var response = await _http.PostAsJsonAsync("api/recommendations/events/search", new LogSearchRequest(term), ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning("Search '{Term}' was not logged: gateway answered {Status}.", term, (int)response.StatusCode);
+            }
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Best-effort telemetry.
+            // Superseded by a newer search - nothing to log.
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(ex, "Search '{Term}' was not logged: gateway unreachable.", term);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Search '{Term}' was not logged.", term);
         }
     }
 

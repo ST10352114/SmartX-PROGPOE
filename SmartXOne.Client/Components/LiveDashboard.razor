@@ -6,6 +6,7 @@
 @using System.Globalization
 @inject SmartXApiClient Api
 @inject ToastService Toasts
+@inject ILogger<LiveDashboard> Logger
 
 <div class="row g-3 mb-3">
     <div class="col-12 col-sm-6 col-lg-3">
@@ -115,11 +116,27 @@
         // sensors that haven't produced anything new.
         foreach (var sensorId in changedSensorIds)
         {
-            var history = await Api.GetSensorHistoryAsync(sensorId);
-            _sparklineCache[sensorId] = history
-                .Select(h => float.TryParse(h.FormattedValue, CultureInfo.InvariantCulture, out var v) ? v : 0f)
-                .TakeLast(12)
-                .ToList();
+            try
+            {
+                var history = await Api.GetSensorHistoryAsync(sensorId);
+                _sparklineCache[sensorId] = history
+                    .Select(h => float.TryParse(h.FormattedValue, CultureInfo.InvariantCulture, out var v) ? v : 0f)
+                    .TakeLast(12)
+                    .ToList();
+            }
+            catch (ApiException ex)
+            {
+                // A sparkline is decoration: keep the cached one and let the
+                // page-level banner report the outage. Forget the timestamp so
+                // the next tick retries this sensor.
+                _lastSeenTimestamp.Remove(sensorId);
+                Logger.LogDebug(ex, "Sparkline history for {SensorId} unavailable.", sensorId);
+            }
+            catch (Exception ex)
+            {
+                _lastSeenTimestamp.Remove(sensorId);
+                Logger.LogWarning(ex, "Loading sparkline history for {SensorId} failed.", sensorId);
+            }
         }
     }
 

@@ -1,6 +1,10 @@
-// Source attribution: Yigitbasioglu, O.M. and Velcu, O. (2012) 
-//'A review of dashboards in performance management: implications for design and research', International Journal of Accounting Information Systems, 13(1),
-// pp. 41–59.
+// Code Attribution
+// Purpose: Dashboard layout and design approach for the client
+// Author: Yigitbasioglu, O.M. and Velcu, O.
+// Title: A review of dashboards in performance management: Implications for design and research
+// Year: 2012
+// URL/DOI: https://doi.org/10.1016/j.accinf.2011.08.002
+// Accessed: 10 November 2026
 
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;

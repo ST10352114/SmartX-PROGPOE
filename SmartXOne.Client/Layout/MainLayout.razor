@@ -1,4 +1,7 @@
 ﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager Nav
+@inject ILogger<MainLayout> Logger
 <div class="page">
     <div class="sidebar">
         <NavMenu />
@@ -10,9 +13,55 @@
         </div>
 
         <article class="content px-4">
-            @Body
+            <ErrorBoundary @ref="_errorBoundary">
+                <ChildContent>
+                    @Body
+                </ChildContent>
+                <ErrorContent Context="ex">
+                    <div class="alert alert-danger" role="alert">
+                        <h2 class="h5">Something went wrong on this page.</h2>
+                        <p class="mb-2">
+                            The rest of the dashboard is still working. Try the page again, or pick
+                            another page from the menu.
+                        </p>
+                        <p class="small text-body-secondary mb-3">@ex.Message</p>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="Recover">Try again</button>
+                    </div>
+                </ErrorContent>
+            </ErrorBoundary>
         </article>
     </main>
 </div>
 
 <ToastHost />
+
+@code {
+    // Code Attribution
+    // Purpose: ErrorBoundary around routed pages, reset on navigation so one failing page doesn't block the others
+    // Author: Microsoft
+    // Title: Handle errors in ASP.NET Core Blazor apps
+    // Year: 2025
+    // URL/DOI: https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/handle-errors
+    // Accessed: 10 November 2026
+    private ErrorBoundary? _errorBoundary;
+
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        try
+        {
+            // Without this the error screen sticks after navigating away,
+            // because the layout (and its boundary) survives page changes.
+            _errorBoundary?.Recover();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Resetting the error boundary after navigation failed.");
+        }
+    }
+
+    private void Recover() => _errorBoundary?.Recover();
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

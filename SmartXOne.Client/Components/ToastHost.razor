@@ -3,6 +3,7 @@
    MainLayout.razor so it's present on every page. *@
 @implements IDisposable
 @inject ToastService Toasts
+@inject ILogger<ToastHost> Logger
 
 <div class="toast-stack" aria-live="polite" aria-atomic="true">
     @foreach (var toast in _visible)
@@ -28,8 +29,17 @@
 
     private async Task AutoDismissAsync(int id)
     {
-        await Task.Delay(TimeSpan.FromSeconds(6));
-        Dismiss(id);
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(6));
+            Dismiss(id);
+        }
+        catch (Exception ex)
+        {
+            // Fire-and-forget task: nothing awaits it, so log rather than let
+            // the exception go unobserved. Worst case the toast stays until closed.
+            Logger.LogWarning(ex, "Auto-dismiss failed for toast {ToastId}.", id);
+        }
     }
 
     private void Dismiss(int id)
