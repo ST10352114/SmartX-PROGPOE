@@ -26,5 +26,6 @@ builder.Services.AddScoped<SmartXApiClient>();
 builder.Services.AddScoped<ToastService>();
 builder.Services.AddScoped<CommandStreamState>();
 builder.Services.AddScoped<IngestionState>();
+builder.Services.AddScoped<TopologyState>();
 
 await builder.Build().RunAsync();

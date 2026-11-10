@@ -400,5 +400,83 @@ public sealed class SmartXApiClient(HttpClient http, ILogger<SmartXApiClient> lo
         }
     }
 
+    // --- Part 3: Network Topology and Mesh Routing ------------------------
+
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<TopologyDto> GetTopologyAsync(CancellationToken ct = default)
+        => GetAsync<TopologyDto>("api/topology", "Loading the mesh topology", ct);
+
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<SpanningTreeDto> GetSpanningTreeAsync(CancellationToken ct = default)
+        => GetAsync<SpanningTreeDto>("api/topology/mst", "Loading the spanning tree", ct);
+
+    /// <exception cref="ApiException">The gateway was unreachable, the node doesn't exist (404), or another error occurred.</exception>
+    public Task<MeshRouteDto> GetMeshRouteAsync(string mac, CancellationToken ct = default)
+        => GetAsync<MeshRouteDto>($"api/topology/route/{Uri.EscapeDataString(mac)}", $"Finding the route for {mac}", ct);
+
+    /// <param name="from">A node MAC or subnet name; <c>null</c> for the gateway.</param>
+    /// <exception cref="ApiException">The gateway was unreachable, the start doesn't exist (404), or another error occurred.</exception>
+    public Task<ReachabilityDto> GetReachabilityAsync(string? from, CancellationToken ct = default)
+        => GetAsync<ReachabilityDto>(
+            string.IsNullOrWhiteSpace(from) ? "api/topology/reachable" : $"api/topology/reachable?from={Uri.EscapeDataString(from)}",
+            $"Checking reachability from {from ?? "the gateway"}", ct);
+
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<MeshComponentDto>> GetMeshComponentsAsync(CancellationToken ct = default)
+        => GetAsync<List<MeshComponentDto>>("api/topology/components", "Loading mesh components", ct);
+
+    public Task<ApiResult<MeshNodeDto>> SetMeshNodeStateAsync(string mac, SetMeshNodeStateRequest request, CancellationToken ct = default)
+        => SendForResultAsync<MeshNodeDto>(HttpMethod.Put, $"api/topology/nodes/{Uri.EscapeDataString(mac)}/state", request, ct);
+
+    // --- Part 3: Telemetry history (AVL range queries) --------------------
+
+    /// <exception cref="ApiException">The gateway was unreachable or answered with an error.</exception>
+    public Task<List<HistoryDeviceDto>> GetHistoryDevicesAsync(CancellationToken ct = default)
+        => GetAsync<List<HistoryDeviceDto>>("api/history", "Loading devices with history", ct);
+
+    /// <summary>Readings for one device between <paramref name="from"/> and <paramref name="to"/> (either optional), optionally one metric.</summary>
+    /// <exception cref="ApiException">The gateway was unreachable, the device has no history (404), the range is invalid (400), or another error occurred.</exception>
+    public Task<TelemetryHistoryDto> GetTelemetryHistoryAsync(
+        string deviceId, DateTimeOffset? from, DateTimeOffset? to, string? metric, int? limit = null, CancellationToken ct = default)
+    {
+        var query = new List<string>();
+        if (from is { } f)
+        {
+            query.Add($"from={Uri.EscapeDataString(f.ToString("O"))}");
+        }
+
+        if (to is { } t)
+        {
+            query.Add($"to={Uri.EscapeDataString(t.ToString("O"))}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(metric))
+        {
+            query.Add($"metric={Uri.EscapeDataString(metric)}");
+        }
+
+        if (limit is { } l)
+        {
+            query.Add($"limit={l}");
+        }
+
+        var url = $"api/history/{Uri.EscapeDataString(deviceId)}" + (query.Count == 0 ? "" : "?" + string.Join('&', query));
+        return GetAsync<TelemetryHistoryDto>(url, $"Loading history for {deviceId}", ct);
+    }
+
+    private async Task<ApiResult<T>> SendForResultAsync<T>(HttpMethod method, string url, object body, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(method, url) { Content = JsonContent.Create(body) };
+            using var response = await _http.SendAsync(request, ct);
+            return await ToResultAsync<T>(response, ct);
+        }
+        catch (Exception ex)
+        {
+            return Fail<T>(ex, $"{method} {url}", ct);
+        }
+    }
+
     private sealed record ReadingPayload(object Value, string? Unit);
 }
