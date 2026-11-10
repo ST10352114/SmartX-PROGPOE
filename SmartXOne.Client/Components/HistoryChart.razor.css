@@ -1,0 +1,46 @@
+.history-chart svg {
+    width: 100%;
+    max-height: 18rem;
+    display: block;
+}
+
+.history-chart polyline {
+    fill: none;
+    stroke: var(--bs-primary);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.history-chart circle {
+    fill: var(--bs-primary);
+}
+
+.history-chart .grid {
+    stroke: #e9ecef;
+    stroke-width: 1;
+}
+
+.history-chart .axis {
+    stroke: #6c757d;
+    stroke-width: 1.5;
+}
+
+.history-chart .tick {
+    fill: #6c757d;
+    font-size: 10px;
+}
+
+.history-chart .tick--y {
+    text-anchor: end;
+}
+
+.history-chart .tick--x {
+    text-anchor: middle;
+}
+
+.history-chart .axis-title {
+    fill: #495057;
+    font-size: 10px;
+    font-weight: 600;
+}

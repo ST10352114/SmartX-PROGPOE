@@ -1,0 +1,338 @@
+@* Sensor history: picks a device the history store holds readings for, runs
+   a from/to range query against the AVL-backed /api/history endpoint, and
+   shows the result as a chart with axes plus a sortable table. *@
+@using System.Globalization
+@inject SmartXApiClient Api
+@inject ILogger<SensorHistoryPanel> Logger
+
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>Sensor history (AVL range query)</span>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="ReloadDevicesAsync">Refresh devices</button>
+    </div>
+    <div class="card-body">
+        <ApiStatusBanner Error="@_error" IsOffline="@_isOffline" OnRetry="ReloadDevicesAsync" />
+
+        <form class="row g-2 align-items-end" @onsubmit="QueryAsync" @onsubmit:preventDefault>
+            <div class="col-12 col-md-6 col-xl-3">
+                <label class="form-label" for="historyDeviceSelect">Device</label>
+                <select id="historyDeviceSelect" class="form-select" value="@_deviceId" @onchange="OnDeviceChangedAsync" disabled="@_busy">
+                    <option value="">Choose a device&hellip;</option>
+                    @foreach (var device in _devices)
+                    {
+                        <option value="@device.DeviceId">@DisplayName(device.DeviceId) (@device.ReadingCount)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <label class="form-label" for="historyFromInput">From</label>
+                <input id="historyFromInput" type="datetime-local" step="1" class="form-control" @bind="_from" />
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <label class="form-label" for="historyToInput">To</label>
+                <input id="historyToInput" type="datetime-local" step="1" class="form-control" @bind="_to" />
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <label class="form-label" for="historyMetricSelect">Metric</label>
+                <select id="historyMetricSelect" class="form-select" @bind="_metric">
+                    <option value="">All metrics</option>
+                    @foreach (var metric in _availableMetrics)
+                    {
+                        <option value="@metric">@metric</option>
+                    }
+                </select>
+            </div>
+            <div class="col-6 col-md-3 col-xl-3 d-flex gap-2">
+                <button type="submit" class="btn btn-primary flex-fill" disabled="@(_busy || string.IsNullOrEmpty(_deviceId))">Query</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@_busy" @onclick="ClearRangeAsync" title="Remove the from/to limits">All time</button>
+            </div>
+        </form>
+
+        <div class="d-flex flex-wrap gap-2 mt-2">
+            <span class="small text-body-secondary align-self-center">Quick range:</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => LastAsync(TimeSpan.FromMinutes(5))">5 min</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => LastAsync(TimeSpan.FromMinutes(30))">30 min</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => LastAsync(TimeSpan.FromHours(2))">2 hours</button>
+        </div>
+
+        @if (_validation is not null)
+        {
+            <div class="alert alert-warning mt-3 mb-0" role="alert">@_validation</div>
+        }
+
+        @if (_devices.Count == 0 && _loadedDevices && _error is null)
+        {
+            <p class="text-body-secondary small mt-3 mb-0"><em>No readings stored yet - run the device simulator or submit a sensor reading.</em></p>
+        }
+
+        @if (_result is { } result)
+        {
+            <p class="small text-body-secondary mt-3 mb-2" aria-live="polite">
+                @result.MatchedCount of @result.TotalStored stored reading(s) matched
+                @(result.Metric is null ? "" : $"for '{result.Metric}'")
+                @RangeText(result).
+                @if (result.Readings.Count < result.MatchedCount)
+                {
+                    <span>Showing the newest @result.Readings.Count.</span>
+                }
+            </p>
+
+            @if (ChartMetric is { } chartMetric)
+            {
+                var chartReadings = result.Readings.Where(r => r.Metric == chartMetric).ToList();
+                <HistoryChart Readings="chartReadings" Metric="@chartMetric" Unit="@(chartReadings.FirstOrDefault()?.Unit ?? "")" />
+                @if (string.IsNullOrEmpty(result.Metric) && result.Readings.Select(r => r.Metric).Distinct().Count() > 1)
+                {
+                    <p class="small text-body-secondary mb-2">Chart shows '@chartMetric'; pick a metric to chart another one. The table lists all of them.</p>
+                }
+            }
+
+            @if (result.Readings.Count > 0)
+            {
+                <div class="table-responsive history-table mt-2">
+                    <table class="table table-sm table-striped mb-0">
+                        <thead>
+                            <tr>
+                                <th scope="col" aria-sort="@AriaSort(SortColumn.Time)">
+                                    <button type="button" class="btn btn-link btn-sm p-0" @onclick="() => SortBy(SortColumn.Time)">Time @SortArrow(SortColumn.Time)</button>
+                                </th>
+                                <th scope="col" aria-sort="@AriaSort(SortColumn.Metric)">
+                                    <button type="button" class="btn btn-link btn-sm p-0" @onclick="() => SortBy(SortColumn.Metric)">Metric @SortArrow(SortColumn.Metric)</button>
+                                </th>
+                                <th scope="col" class="text-end" aria-sort="@AriaSort(SortColumn.Value)">
+                                    <button type="button" class="btn btn-link btn-sm p-0" @onclick="() => SortBy(SortColumn.Value)">Value @SortArrow(SortColumn.Value)</button>
+                                </th>
+                                <th scope="col">Source</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var reading in SortedReadings)
+                            {
+                                <tr>
+                                    <td>@reading.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)</td>
+                                    <td>@reading.Metric</td>
+                                    <td class="text-end">@reading.Value.ToString("0.##", CultureInfo.CurrentCulture) @reading.Unit</td>
+                                    <td><span class="badge @(reading.Source == "sensor" ? "bg-info text-dark" : "bg-secondary")">@reading.Source</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private enum SortColumn { Time, Metric, Value }
+
+    private List<HistoryDeviceDto> _devices = [];
+    private bool _loadedDevices;
+    private string _deviceId = "";
+    private DateTime? _from;
+    private DateTime? _to;
+    private string _metric = "";
+    private IReadOnlyList<string> _availableMetrics = [];
+    private TelemetryHistoryDto? _result;
+    private string? _error;
+    private bool _isOffline;
+    private string? _validation;
+    private bool _busy;
+    private SortColumn _sort = SortColumn.Time;
+    private bool _descending = true;
+
+    /// <summary>MAC -> friendly name, so mesh devices show as "GHA-01" rather than a bare MAC.</summary>
+    [Parameter]
+    public IReadOnlyDictionary<string, string>? DeviceNames { get; set; }
+
+    /// <summary>Set by the parent (e.g. a "History" button) to jump straight to a device.</summary>
+    [Parameter]
+    public string? SelectedDeviceId { get; set; }
+
+    private string? _lastSelectedFromParent;
+
+    protected override async Task OnInitializedAsync() => await ReloadDevicesAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (SelectedDeviceId is { } selected && selected != _lastSelectedFromParent)
+        {
+            _lastSelectedFromParent = selected;
+            await SelectDeviceAsync(selected);
+        }
+    }
+
+    private string DisplayName(string deviceId)
+        => DeviceNames is not null && DeviceNames.TryGetValue(deviceId, out var name) ? $"{name} - {deviceId}" : deviceId;
+
+    /// <summary>The metric charted: the selected one, or the first one present when "All metrics" is chosen.</summary>
+    private string? ChartMetric => _result is null || _result.Readings.Count == 0
+        ? null
+        : string.IsNullOrEmpty(_result.Metric) ? _result.Readings[0].Metric : _result.Metric;
+
+    private IEnumerable<HistoricalReadingDto> SortedReadings
+    {
+        get
+        {
+            var readings = _result?.Readings ?? [];
+            IOrderedEnumerable<HistoricalReadingDto> ordered = _sort switch
+            {
+                SortColumn.Metric => _descending ? readings.OrderByDescending(r => r.Metric) : readings.OrderBy(r => r.Metric),
+                SortColumn.Value => _descending ? readings.OrderByDescending(r => r.Value) : readings.OrderBy(r => r.Value),
+                _ => _descending ? readings.OrderByDescending(r => r.Timestamp) : readings.OrderBy(r => r.Timestamp),
+            };
+            return _sort == SortColumn.Time ? ordered : ordered.ThenByDescending(r => r.Timestamp);
+        }
+    }
+
+    private async Task ReloadDevicesAsync()
+    {
+        _busy = true;
+        try
+        {
+            _devices = (await Api.GetHistoryDevicesAsync())
+                .OrderBy(d => DisplayName(d.DeviceId), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _error = null;
+            _isOffline = false;
+        }
+        catch (ApiException ex)
+        {
+            _error = ex.Message;
+            _isOffline = ex.IsOffline;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Loading devices with history failed.");
+            _error = $"Couldn't load the devices with history: {ex.Message}";
+            _isOffline = false;
+        }
+        finally
+        {
+            _loadedDevices = true;
+            _busy = false;
+        }
+    }
+
+    private async Task OnDeviceChangedAsync(ChangeEventArgs e) => await SelectDeviceAsync(e.Value?.ToString() ?? "");
+
+    private async Task SelectDeviceAsync(string deviceId)
+    {
+        _deviceId = deviceId;
+        _metric = "";
+        _availableMetrics = [];
+        _result = null;
+        _validation = null;
+        if (string.IsNullOrEmpty(deviceId))
+        {
+            return;
+        }
+
+        // A device that started reporting after the list loaded wouldn't be in the drop-down yet.
+        if (!_devices.Any(d => string.Equals(d.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)))
+        {
+            await ReloadDevicesAsync();
+        }
+
+        if (!_devices.Any(d => string.Equals(d.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)))
+        {
+            // e.g. the gateway, which routes traffic but reports no readings of its own.
+            _validation = $"No history is stored for '{DisplayName(deviceId)}' yet.";
+            return;
+        }
+
+        await QueryAsync();
+    }
+
+    private async Task LastAsync(TimeSpan window)
+    {
+        _to = null;
+        _from = DateTime.Now - window;
+        await QueryAsync();
+    }
+
+    private async Task ClearRangeAsync()
+    {
+        _from = null;
+        _to = null;
+        await QueryAsync();
+    }
+
+    private async Task QueryAsync()
+    {
+        _validation = null;
+        if (string.IsNullOrEmpty(_deviceId))
+        {
+            _validation = "Choose a device first.";
+            return;
+        }
+
+        if (_from is { } f && _to is { } t && f > t)
+        {
+            _validation = "'From' must be before 'To'.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            // datetime-local has no zone: it's the browser's local time.
+            DateTimeOffset? from = _from is { } fromLocal ? new DateTimeOffset(fromLocal, TimeZoneInfo.Local.GetUtcOffset(fromLocal)) : null;
+            DateTimeOffset? to = _to is { } toLocal ? new DateTimeOffset(toLocal, TimeZoneInfo.Local.GetUtcOffset(toLocal)) : null;
+
+            _result = await Api.GetTelemetryHistoryAsync(_deviceId, from, to, string.IsNullOrEmpty(_metric) ? null : _metric);
+            _availableMetrics = _result.AvailableMetrics;
+            _error = null;
+            _isOffline = false;
+        }
+        catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _result = null;
+            _validation = $"No history is stored for '{DisplayName(_deviceId)}' yet.";
+        }
+        catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            _validation = ex.Message;
+        }
+        catch (ApiException ex)
+        {
+            _error = ex.Message;
+            _isOffline = ex.IsOffline;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "History query for {DeviceId} failed.", _deviceId);
+            _error = $"Couldn't load the history: {ex.Message}";
+            _isOffline = false;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SortBy(SortColumn column)
+    {
+        if (_sort == column)
+        {
+            _descending = !_descending;
+        }
+        else
+        {
+            _sort = column;
+            _descending = column != SortColumn.Metric;
+        }
+    }
+
+    private string SortArrow(SortColumn column) => _sort != column ? "" : _descending ? "▼" : "▲";
+
+    private string AriaSort(SortColumn column) => _sort != column ? "none" : _descending ? "descending" : "ascending";
+
+    private static string RangeText(TelemetryHistoryDto result) => (result.From, result.To) switch
+    {
+        (null, null) => "across all time",
+        ({ } f, null) => $"since {f.ToLocalTime():yyyy-MM-dd HH:mm:ss}",
+        (null, { } t) => $"up to {t.ToLocalTime():yyyy-MM-dd HH:mm:ss}",
+        ({ } f, { } t) => $"between {f.ToLocalTime():yyyy-MM-dd HH:mm:ss} and {t.ToLocalTime():yyyy-MM-dd HH:mm:ss}",
+    };
+}

@@ -1,0 +1,122 @@
+@* Line chart for one metric of a device's stored history, with a value axis
+   (five ticks between the min and max) and a time axis (start, two midpoints,
+   end). Plain SVG so it needs no charting library. *@
+@using System.Globalization
+
+@if (Readings.Count == 0)
+{
+    <p class="text-body-secondary small mb-0"><em>No readings in this range to chart.</em></p>
+}
+else
+{
+    <div class="history-chart">
+        <svg viewBox="0 0 @Width @Height" role="img" aria-label="@AriaLabel">
+            @* Each tick is wrapped in <g>: inside a code block Razor treats a bare <text> as its own tag. *@
+            @foreach (var tick in _yTicks)
+            {
+                <g>
+                    <line class="grid" x1="@F(Left)" y1="@F(Y(tick))" x2="@F(Width - Right)" y2="@F(Y(tick))" />
+                    <text class="tick tick--y" x="@F(Left - 6)" y="@F(Y(tick) + 4)">@tick.ToString("0.##", CultureInfo.CurrentCulture)</text>
+                </g>
+            }
+
+            @foreach (var tick in _xTicks)
+            {
+                <g>
+                    <line class="grid" x1="@F(X(tick))" y1="@F(Top)" x2="@F(X(tick))" y2="@F(Height - Bottom)" />
+                    <text class="tick tick--x" x="@F(X(tick))" y="@F(Height - Bottom + 16)">@tick.ToLocalTime().ToString(_timeFormat, CultureInfo.CurrentCulture)</text>
+                </g>
+            }
+
+            <line class="axis" x1="@F(Left)" y1="@F(Height - Bottom)" x2="@F(Width - Right)" y2="@F(Height - Bottom)" />
+            <line class="axis" x1="@F(Left)" y1="@F(Top)" x2="@F(Left)" y2="@F(Height - Bottom)" />
+            <text class="axis-title" x="@F(Left)" y="@F(Top - 8)">@Unit</text>
+
+            <polyline points="@_points" />
+            @if (Readings.Count <= 60)
+            {
+                foreach (var reading in Readings)
+                {
+                    <circle r="2.5" cx="@F(X(reading.Timestamp))" cy="@F(Y(reading.Value))">
+                        <title>@reading.Timestamp.ToLocalTime().ToString("g", CultureInfo.CurrentCulture): @reading.Value.ToString("0.##", CultureInfo.CurrentCulture) @reading.Unit</title>
+                    </circle>
+                }
+            }
+        </svg>
+    </div>
+}
+
+@code {
+    private const double Width = 640, Height = 240, Left = 52, Right = 16, Top = 24, Bottom = 30;
+
+    private List<double> _yTicks = [];
+    private List<DateTimeOffset> _xTicks = [];
+    private string _points = "";
+    private string _timeFormat = "HH:mm:ss";
+    private double _minY, _maxY;
+    private DateTimeOffset _minX, _maxX;
+
+    /// <summary>Readings for a single metric, oldest first.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<HistoricalReadingDto> Readings { get; set; } = [];
+
+    [Parameter]
+    public string Unit { get; set; } = "";
+
+    [Parameter]
+    public string Metric { get; set; } = "";
+
+    private string AriaLabel => Readings.Count == 0
+        ? "Empty chart"
+        : $"{Metric} over time: {Readings.Count} readings from {_minY:0.##} to {_maxY:0.##} {Unit}";
+
+    protected override void OnParametersSet()
+    {
+        _yTicks = [];
+        _xTicks = [];
+        _points = "";
+        if (Readings.Count == 0)
+        {
+            return;
+        }
+
+        _minY = Readings.Min(r => r.Value);
+        _maxY = Readings.Max(r => r.Value);
+        if (_maxY - _minY < 1e-9)
+        {
+            // A flat line still needs a visible band to sit in.
+            _minY -= 1;
+            _maxY += 1;
+        }
+
+        _minX = Readings[0].Timestamp;
+        _maxX = Readings[^1].Timestamp;
+        if (_maxX <= _minX)
+        {
+            _maxX = _minX.AddSeconds(1);
+        }
+
+        for (var i = 0; i <= 4; i++)
+        {
+            _yTicks.Add(_minY + (_maxY - _minY) * i / 4);
+        }
+
+        for (var i = 0; i <= 3; i++)
+        {
+            _xTicks.Add(_minX + (_maxX - _minX) * i / 3);
+        }
+
+        // Ranges spanning days need the date, not just the time of day.
+        _timeFormat = (_maxX - _minX) > TimeSpan.FromDays(1) ? "dd MMM HH:mm" : "HH:mm:ss";
+        _points = string.Join(" ", Readings.Select(r => $"{F(X(r.Timestamp))},{F(Y(r.Value))}"));
+    }
+
+    private double X(DateTimeOffset t)
+        => Left + (t - _minX).TotalMilliseconds / (_maxX - _minX).TotalMilliseconds * (Width - Left - Right);
+
+    private double Y(double v)
+        => Top + (_maxY - v) / (_maxY - _minY) * (Height - Top - Bottom);
+
+    // SVG coordinates must use '.' whatever the browser culture.
+    private static string F(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+}

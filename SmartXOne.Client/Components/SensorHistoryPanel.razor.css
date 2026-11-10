@@ -1,0 +1,10 @@
+.history-table {
+    max-height: 22rem;
+    overflow-y: auto;
+}
+
+.history-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bs-body-bg, #fff);
+}

@@ -286,6 +286,7 @@ else
                                     </td>
                                     <td class="text-end">
                                         <button class="btn btn-sm btn-outline-secondary me-1" disabled="@_routeBusy" @onclick="() => ShowRouteAsync(node.Mac)">Route</button>
+                                        <button class="btn btn-sm btn-outline-secondary me-1" @onclick="() => ShowHistory(node.Mac)">History</button>
                                         @if (!node.IsGateway)
                                         {
                                             <button class="btn btn-sm @(node.IsOnline ? "btn-outline-danger" : "btn-outline-success")" disabled="@_toggleBusy"
@@ -302,6 +303,10 @@ else
             </div>
         </div>
     }
+
+    <div id="sensor-history">
+        <SensorHistoryPanel DeviceNames="DeviceNames" SelectedDeviceId="@_historyDeviceId" />
+    </div>
 }
 
 @code {
@@ -309,11 +314,14 @@ else
     private bool _routeBusy;
     private bool _reachBusy;
     private bool _toggleBusy;
+    private string? _historyDeviceId;
 
     private IReadOnlyList<MeshNodeDto> Nodes => State.Topology?.Nodes
         .OrderByDescending(n => n.IsGateway)
         .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase)
         .ToList() ?? [];
+
+    private IReadOnlyDictionary<string, string> DeviceNames => Nodes.ToDictionary(n => n.Mac, n => n.Name, StringComparer.OrdinalIgnoreCase);
 
     private IEnumerable<string> Subnets => Nodes.Select(n => n.Subnet).Distinct(StringComparer.OrdinalIgnoreCase);
 
@@ -454,6 +462,9 @@ else
 
     private static string StatusBadge(MeshNodeDto node)
         => !node.IsOnline ? "bg-secondary" : node.ConnectedToGateway ? "bg-success" : "bg-warning text-dark";
+
+    /// <summary>Points the history panel below at this node.</summary>
+    private void ShowHistory(string mac) => _historyDeviceId = mac;
 
     public void Dispose() => State.Changed -= OnStateChanged;
 }
