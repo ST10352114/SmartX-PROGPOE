@@ -1,0 +1,134 @@
+.mesh-map {
+    overflow-x: auto;
+}
+
+.mesh-map svg {
+    width: 100%;
+    min-width: 480px;
+    max-height: 32rem;
+    display: block;
+    background: var(--bs-tertiary-bg, #f8f9fa);
+    border-radius: var(--sx-radius-md, 0.5rem);
+}
+
+.mesh-link {
+    stroke: #adb5bd;
+    stroke-width: 1.5;
+}
+
+.mesh-link--mst {
+    stroke: #0d6efd;
+    stroke-width: 4;
+}
+
+.mesh-link--unusable {
+    stroke: #dc3545;
+    stroke-width: 1.5;
+    stroke-dasharray: 5 4;
+    opacity: 0.6;
+}
+
+.mesh-route {
+    stroke: #fd7e14;
+    stroke-width: 8;
+    stroke-linecap: round;
+    opacity: 0.75;
+    pointer-events: none;
+}
+
+.mesh-node {
+    cursor: pointer;
+}
+
+.mesh-node circle,
+.mesh-node rect {
+    stroke: #fff;
+    stroke-width: 2;
+}
+
+.mesh-node:focus {
+    outline: none;
+}
+
+.mesh-node:focus-visible circle,
+.mesh-node:focus-visible rect,
+.mesh-node:hover circle,
+.mesh-node:hover rect {
+    stroke: #212529;
+    stroke-width: 3;
+}
+
+.mesh-node--gateway rect { fill: #6f42c1; }
+.mesh-node--online circle { fill: #198754; }
+.mesh-node--isolated circle { fill: #ffc107; }
+.mesh-node--offline circle { fill: #6c757d; }
+
+.mesh-node--on-route circle,
+.mesh-node--on-route rect {
+    stroke: #fd7e14;
+    stroke-width: 3;
+}
+
+.mesh-hop {
+    fill: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.mesh-node--isolated .mesh-hop {
+    fill: #212529;
+}
+
+.mesh-label {
+    fill: #212529;
+    font-size: 11px;
+    font-weight: 600;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.mesh-node--offline .mesh-label {
+    fill: #6c757d;
+    text-decoration: line-through;
+}
+
+.mesh-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sx-space-2, 0.5rem) var(--sx-space-4, 1rem);
+    list-style: none;
+    padding: 0;
+    margin: var(--sx-space-2, 0.5rem) 0 0;
+    font-size: var(--sx-fs-sm, 0.8125rem);
+}
+
+.mesh-legend li {
+    display: flex;
+    align-items: center;
+    gap: var(--sx-space-1, 0.25rem);
+}
+
+.swatch {
+    display: inline-block;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+}
+
+.swatch-gateway { background: #6f42c1; border-radius: 2px; }
+.swatch-online { background: #198754; }
+.swatch-isolated { background: #ffc107; }
+.swatch-offline { background: #6c757d; }
+
+.swatch-line {
+    display: inline-block;
+    width: 1.4rem;
+    height: 0;
+    border-top: 2px solid #adb5bd;
+}
+
+.swatch-mst { border-top: 4px solid #0d6efd; }
+.swatch-unusable { border-top: 2px dashed #dc3545; }
+.swatch-route { border-top: 6px solid #fd7e14; opacity: 0.75; }

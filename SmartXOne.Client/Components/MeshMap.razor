@@ -1,0 +1,173 @@
+@* SVG site plan of the mesh: nodes drawn at their X/Y position (metres), every
+   link shown, minimum-spanning-tree links drawn thicker, and the searched
+   route highlighted hop by hop. Clicking (or Enter/Space on) a node asks the
+   page to toggle it offline/online. *@
+@inject ILogger<MeshMap> Logger
+
+@if (Topology is null || Topology.Nodes.Count == 0)
+{
+    <p class="text-body-secondary"><em>No mesh nodes yet - start the device simulator to register the mesh.</em></p>
+}
+else
+{
+    <div class="mesh-map">
+        <svg viewBox="@_viewBox" role="group" aria-label="Mesh network map with @Topology.Nodes.Count nodes and @Topology.Links.Count links">
+            @foreach (var link in Topology.Links)
+            {
+                if (!_byMac.TryGetValue(link.A, out var a) || !_byMac.TryGetValue(link.B, out var b))
+                {
+                    continue;
+                }
+
+                <line class="@LinkClass(link)" x1="@Px(a.X)" y1="@Py(a.Y)" x2="@Px(b.X)" y2="@Py(b.Y)">
+                    <title>@NameOf(link.A) - @NameOf(link.B): @link.Rssi dBm, @link.DistanceMetres.ToString("0.0") m, cost @link.Cost.ToString("0.00")@(link.Usable ? "" : " (unusable)")</title>
+                </line>
+            }
+
+            @for (var i = 1; i < HighlightPath.Count; i++)
+            {
+                if (_byMac.TryGetValue(HighlightPath[i - 1], out var from) && _byMac.TryGetValue(HighlightPath[i], out var to))
+                {
+                    <line class="mesh-route" x1="@Px(from.X)" y1="@Py(from.Y)" x2="@Px(to.X)" y2="@Py(to.Y)" />
+                }
+            }
+
+            @foreach (var node in Topology.Nodes)
+            {
+                var hop = HopIndex(node.Mac);
+                <g class="@NodeClass(node)" transform="translate(@Px(node.X) @Py(node.Y))"
+                   role="button" tabindex="0"
+                   aria-label="@NodeLabel(node)"
+                   @onclick="() => ToggleAsync(node)"
+                   @onkeydown="e => OnNodeKeyAsync(e, node)">
+                    <title>@NodeLabel(node)</title>
+                    @if (node.IsGateway)
+                    {
+                        <rect x="-11" y="-11" width="22" height="22" rx="3" />
+                    }
+                    else
+                    {
+                        <circle r="9" />
+                    }
+                    @* Always rendered (Razor reserves a bare <text> inside an @if); empty when the node is not on the route. *@
+                    <text class="mesh-hop" y="4">@(hop >= 0 ? hop.ToString() : "")</text>
+                    <text class="mesh-label" y="25">@node.Name</text>
+                </g>
+            }
+        </svg>
+
+        <ul class="mesh-legend" aria-label="Map legend">
+            <li><span class="swatch swatch-gateway"></span>Gateway</li>
+            <li><span class="swatch swatch-online"></span>Online, routed to gateway</li>
+            <li><span class="swatch swatch-isolated"></span>Online, isolated</li>
+            <li><span class="swatch swatch-offline"></span>Offline</li>
+            <li><span class="swatch-line swatch-mst"></span>Spanning tree link</li>
+            <li><span class="swatch-line swatch-link"></span>Other link</li>
+            <li><span class="swatch-line swatch-unusable"></span>Unusable link</li>
+            <li><span class="swatch-line swatch-route"></span>Searched route (hop numbers)</li>
+        </ul>
+    </div>
+}
+
+@code {
+    private const double Scale = 9;
+    private const double Margin = 40;
+
+    private Dictionary<string, MeshNodeDto> _byMac = new(StringComparer.OrdinalIgnoreCase);
+    private double _minX, _maxY;
+    private string _viewBox = "0 0 0 0";
+
+    [Parameter, EditorRequired]
+    public TopologyDto? Topology { get; set; }
+
+    /// <summary>Gateway-first route to highlight; empty for none.</summary>
+    [Parameter]
+    public IReadOnlyList<string> HighlightPath { get; set; } = [];
+
+    /// <summary>Called when a node is clicked; the page decides what toggling means.</summary>
+    [Parameter]
+    public EventCallback<MeshNodeDto> OnNodeToggle { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        _byMac = new Dictionary<string, MeshNodeDto>(StringComparer.OrdinalIgnoreCase);
+        if (Topology is null || Topology.Nodes.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var node in Topology.Nodes)
+        {
+            _byMac[node.Mac] = node;
+        }
+
+        _minX = Topology.Nodes.Min(n => n.X);
+        _maxY = Topology.Nodes.Max(n => n.Y);
+        var width = (Topology.Nodes.Max(n => n.X) - _minX) * Scale + Margin * 2;
+        var height = (_maxY - Topology.Nodes.Min(n => n.Y)) * Scale + Margin * 2;
+        _viewBox = FormattableString.Invariant($"0 0 {width:0.#} {height:0.#}");
+    }
+
+    // Site-plan Y grows north; SVG Y grows down, so Y is flipped.
+    private string Px(double x) => ((x - _minX) * Scale + Margin).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string Py(double y) => ((_maxY - y) * Scale + Margin).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string NameOf(string mac) => _byMac.TryGetValue(mac, out var node) ? node.Name : mac;
+
+    private int HopIndex(string mac)
+    {
+        for (var i = 0; i < HighlightPath.Count; i++)
+        {
+            if (string.Equals(HighlightPath[i], mac, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string LinkClass(MeshLinkDto link)
+        => !link.Usable ? "mesh-link mesh-link--unusable"
+         : link.InSpanningTree ? "mesh-link mesh-link--mst"
+         : "mesh-link";
+
+    private string NodeClass(MeshNodeDto node)
+    {
+        var state = node.IsGateway ? "gateway"
+                  : !node.IsOnline ? "offline"
+                  : node.ConnectedToGateway ? "online"
+                  : "isolated";
+        return HopIndex(node.Mac) >= 0 ? $"mesh-node mesh-node--{state} mesh-node--on-route" : $"mesh-node mesh-node--{state}";
+    }
+
+    private static string NodeLabel(MeshNodeDto node)
+    {
+        var state = !node.IsOnline ? "offline" : node.ConnectedToGateway ? "online" : "online but isolated";
+        var action = node.IsGateway ? "gateway, cannot be taken offline" : node.IsOnline ? "press to take offline" : "press to bring online";
+        return $"{node.Name} ({node.Mac}), {node.Subnet}, {state}, battery {node.Battery}% - {action}";
+    }
+
+    private async Task ToggleAsync(MeshNodeDto node)
+    {
+        try
+        {
+            await OnNodeToggle.InvokeAsync(node);
+        }
+        catch (Exception ex)
+        {
+            // The page's handler reports its own failures; this only stops one
+            // that slipped through from taking the whole map down.
+            Logger.LogError(ex, "Toggling {Mac} failed.", node.Mac);
+        }
+    }
+
+    private async Task OnNodeKeyAsync(KeyboardEventArgs e, MeshNodeDto node)
+    {
+        if (e.Key is "Enter" or " ")
+        {
+            await ToggleAsync(node);
+        }
+    }
+}

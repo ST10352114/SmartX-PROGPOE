@@ -1,0 +1,459 @@
+@page "/topology"
+@implements IDisposable
+@inject TopologyState State
+@inject ToastService Toasts
+@inject ILogger<Topology> Logger
+
+<PageTitle>Network Topology and Routing</PageTitle>
+
+<h1>Network Topology and Routing</h1>
+<p class="lead">
+    The mesh as a graph: every node and radio link, the minimum spanning tree traffic follows to the
+    gateway, a route search by MAC or name, and a reachability sweep. Click a node to take it offline
+    and watch the route move around it.
+</p>
+
+<ApiStatusBanner Error="@State.LoadError" IsOffline="@State.IsOffline"
+                 Hint="Showing the last mesh received; retrying automatically every few seconds."
+                 OnRetry="State.RefreshAsync" />
+
+@if (!State.HasLoadedOnce)
+{
+    <div class="d-flex align-items-center gap-2 text-body-secondary mb-3">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        <span>Loading the mesh topology&hellip;</span>
+    </div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span>Mesh map</span>
+            @if (State.Topology is { } topology)
+            {
+                <span class="small text-body-secondary">
+                    @topology.Nodes.Count nodes &middot; @topology.Links.Count links &middot; version @topology.Version
+                    &middot; updated @topology.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")
+                </span>
+            }
+        </div>
+        <div class="card-body">
+            <MeshMap Topology="State.Topology" HighlightPath="HighlightPath" OnNodeToggle="ToggleNodeAsync" />
+            @if (_toggleBusy)
+            {
+                <p class="small text-body-secondary mt-2 mb-0">Updating node&hellip;</p>
+            }
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Route search</div>
+                <div class="card-body">
+                    <form class="row g-2 align-items-end" @onsubmit="SearchRouteAsync" @onsubmit:preventDefault>
+                        <div class="col-12 col-sm-8">
+                            <label class="form-label" for="routeSearchInput">Node MAC or name</label>
+                            <input id="routeSearchInput" class="form-control" list="meshNodeOptions" @bind="_routeQuery"
+                                   placeholder="e.g. PMP-04 or AA:BB:CC:03:00:04" autocomplete="off" />
+                            <datalist id="meshNodeOptions">
+                                @foreach (var node in Nodes)
+                                {
+                                    <option value="@node.Name">@node.Mac</option>
+                                    <option value="@node.Mac">@node.Name</option>
+                                }
+                            </datalist>
+                        </div>
+                        <div class="col-12 col-sm-4 d-flex gap-2">
+                            <button type="submit" class="btn btn-primary flex-fill" disabled="@_routeBusy">Find route</button>
+                            <button type="button" class="btn btn-outline-secondary" disabled="@(_routeBusy || State.RouteMac is null)" @onclick="ClearRouteAsync">Clear</button>
+                        </div>
+                    </form>
+
+                    @if (State.RouteError is not null)
+                    {
+                        <div class="alert alert-warning mt-3 mb-0" role="alert">@State.RouteError</div>
+                    }
+                    else if (State.Route is { } route)
+                    {
+                        <div class="mt-3" aria-live="polite">
+                            <p class="mb-2">
+                                <span class="badge @(route.Reachable ? "bg-success" : "bg-danger") me-1">@(route.Reachable ? "Reachable" : "Unreachable")</span>
+                                @if (route.Rerouted)
+                                {
+                                    <span class="badge bg-warning text-dark me-1">Rerouted</span>
+                                }
+                                @route.Message
+                            </p>
+
+                            @if (route.Reachable)
+                            {
+                                <ol class="route-hops">
+                                    @foreach (var mac in route.Path)
+                                    {
+                                        <li><strong>@NameOf(mac)</strong> <code>@mac</code></li>
+                                    }
+                                </ol>
+                                <p class="small mb-1">
+                                    Spanning-tree path: @(route.Path.Count - 1) hop(s), cost @route.PathCost.ToString("0.00").
+                                </p>
+                                @if (route.FewestHopPath is { } fewest)
+                                {
+                                    <p class="small mb-1 text-body-secondary">
+                                        Fewest-hop path (BFS): @(fewest.Count - 1) hop(s) via @string.Join(" → ", fewest.Select(NameOf)).
+                                    </p>
+                                }
+                            }
+
+                            @if (route.Rerouted && route.PreviousPath.Count > 0)
+                            {
+                                <p class="small mb-0 text-body-secondary">
+                                    Previous route: @string.Join(" → ", route.PreviousPath.Select(NameOf))
+                                    @if (route.AvoidedNodes.Count > 0)
+                                    {
+                                        <span> (now avoiding @string.Join(", ", route.AvoidedNodes.Select(NameOf)))</span>
+                                    }
+                                </p>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="small text-body-secondary mt-3 mb-0">Search for a node to highlight its route from the gateway on the map.</p>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Reachability sweep (BFS)</div>
+                <div class="card-body">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-12 col-sm-8">
+                            <label class="form-label" for="reachFromSelect">Sweep from</label>
+                            <select id="reachFromSelect" class="form-select" value="@(State.ReachabilityFrom ?? "")" @onchange="OnReachFromChangedAsync" disabled="@_reachBusy">
+                                <option value="">Gateway</option>
+                                <optgroup label="Subnet">
+                                    @foreach (var subnet in Subnets)
+                                    {
+                                        <option value="@subnet">@subnet</option>
+                                    }
+                                </optgroup>
+                                <optgroup label="Node">
+                                    @foreach (var node in Nodes)
+                                    {
+                                        <option value="@node.Mac">@node.Name (@node.Mac)</option>
+                                    }
+                                </optgroup>
+                            </select>
+                        </div>
+                    </div>
+
+                    @if (State.ReachabilityError is not null)
+                    {
+                        <div class="alert alert-warning mt-3 mb-0" role="alert">@State.ReachabilityError</div>
+                    }
+                    else if (State.Reachability is { } reach)
+                    {
+                        <div class="row g-3 mt-1" aria-live="polite">
+                            <div class="col-12 col-md-6">
+                                <h3 class="h6">Reachable (@reach.Reachable.Count)</h3>
+                                <ul class="list-unstyled small mb-0">
+                                    @foreach (var r in reach.Reachable.OrderBy(r => r.Hops).ThenBy(r => NameOf(r.Mac)))
+                                    {
+                                        <li><span class="badge bg-success me-1">@r.Hops hop@(r.Hops == 1 ? "" : "s")</span>@NameOf(r.Mac)</li>
+                                    }
+                                </ul>
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <h3 class="h6">Unreachable (@reach.Unreachable.Count)</h3>
+                                @if (reach.Unreachable.Count == 0)
+                                {
+                                    <p class="small text-body-secondary mb-0">Every node can be reached.</p>
+                                }
+                                else
+                                {
+                                    <ul class="list-unstyled small mb-0">
+                                        @foreach (var mac in reach.Unreachable.OrderBy(NameOf))
+                                        {
+                                            <li><span class="badge bg-danger me-1">@(IsOnline(mac) ? "cut off" : "offline")</span>@NameOf(mac)</li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Minimum spanning tree (Prim)</div>
+                <div class="card-body">
+                    @if (State.SpanningTree is { } mst)
+                    {
+                        <p class="mb-2">
+                            <strong>@mst.Edges.Count</strong> link(s), total cost <strong>@mst.TotalCost.ToString("0.00")</strong>,
+                            @mst.Roots.Count tree(s).
+                        </p>
+                        @if (mst.IsolatedNodes.Count > 0)
+                        {
+                            <p class="small text-warning-emphasis mb-1">Isolated from the gateway: @string.Join(", ", mst.IsolatedNodes.Select(NameOf))</p>
+                        }
+                        @if (mst.OfflineNodes.Count > 0)
+                        {
+                            <p class="small text-body-secondary mb-1">Offline: @string.Join(", ", mst.OfflineNodes.Select(NameOf))</p>
+                        }
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col" class="text-end">Cost</th></tr></thead>
+                                <tbody>
+                                    @foreach (var edge in mst.Edges)
+                                    {
+                                        <tr><td>@NameOf(edge.From)</td><td>@NameOf(edge.To)</td><td class="text-end">@edge.Cost.ToString("0.00")</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="small text-body-secondary mb-0">No spanning tree yet.</p>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Connected components (DFS)</div>
+                <div class="card-body">
+                    @if (State.Components.Count == 0)
+                    {
+                        <p class="small text-body-secondary mb-0">No online nodes.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var component in State.Components)
+                            {
+                                <li class="list-group-item px-0">
+                                    <span class="badge @(component.ContainsGateway ? "bg-primary" : "bg-warning text-dark") me-1">
+                                        @(component.ContainsGateway ? "Gateway island" : "Isolated island")
+                                    </span>
+                                    @component.Macs.Count node(s) across @string.Join(", ", component.Subnets)
+                                    <span class="d-block small text-body-secondary">@string.Join(", ", component.Macs.Select(NameOf))</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (Nodes.Count > 0)
+    {
+        <div class="card mb-4">
+            <div class="card-header">Nodes</div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th scope="col">Name</th>
+                                <th scope="col">MAC</th>
+                                <th scope="col">Subnet</th>
+                                <th scope="col">Battery</th>
+                                <th scope="col">Status</th>
+                                <th scope="col"><span class="visually-hidden">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var node in Nodes)
+                            {
+                                <tr>
+                                    <td>@node.Name @(node.IsGateway ? "(gateway)" : "")</td>
+                                    <td><code>@node.Mac</code></td>
+                                    <td>@node.Subnet</td>
+                                    <td>@node.Battery%</td>
+                                    <td>
+                                        <span class="badge @StatusBadge(node)">@StatusText(node)</span>
+                                    </td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-secondary me-1" disabled="@_routeBusy" @onclick="() => ShowRouteAsync(node.Mac)">Route</button>
+                                        @if (!node.IsGateway)
+                                        {
+                                            <button class="btn btn-sm @(node.IsOnline ? "btn-outline-danger" : "btn-outline-success")" disabled="@_toggleBusy"
+                                                    @onclick="() => ToggleNodeAsync(node)">
+                                                @(node.IsOnline ? "Take offline" : "Bring online")
+                                            </button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private string _routeQuery = "";
+    private bool _routeBusy;
+    private bool _reachBusy;
+    private bool _toggleBusy;
+
+    private IReadOnlyList<MeshNodeDto> Nodes => State.Topology?.Nodes
+        .OrderByDescending(n => n.IsGateway)
+        .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase)
+        .ToList() ?? [];
+
+    private IEnumerable<string> Subnets => Nodes.Select(n => n.Subnet).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private IReadOnlyList<string> HighlightPath => State.Route is { Reachable: true } route ? route.Path : [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnStateChanged;
+        _routeQuery = State.RouteMac is { } mac ? NameOf(mac) : "";
+
+        try
+        {
+            await State.EnsureStartedAsync();
+        }
+        catch (Exception ex)
+        {
+            // TopologyState reports load failures through LoadError; this is a last resort.
+            Logger.LogError(ex, "Starting the topology view failed.");
+            Toasts.Show($"Couldn't start the topology view: {ex.Message}", ToastLevel.Danger);
+        }
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private string NameOf(string mac)
+        => State.Topology?.Nodes.FirstOrDefault(n => string.Equals(n.Mac, mac, StringComparison.OrdinalIgnoreCase))?.Name ?? mac;
+
+    private bool IsOnline(string mac)
+        => State.Topology?.Nodes.FirstOrDefault(n => string.Equals(n.Mac, mac, StringComparison.OrdinalIgnoreCase))?.IsOnline ?? false;
+
+    /// <summary>Accepts a node name or MAC (any case) and turns it into the MAC the API expects.</summary>
+    private string? ResolveMac(string query)
+    {
+        var trimmed = query.Trim();
+        var match = Nodes.FirstOrDefault(n => string.Equals(n.Mac, trimmed, StringComparison.OrdinalIgnoreCase)
+                                           || string.Equals(n.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+        return match?.Mac ?? (trimmed.Length == 0 ? null : trimmed);
+    }
+
+    private async Task SearchRouteAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_routeQuery))
+        {
+            await ClearRouteAsync();
+            return;
+        }
+
+        await ShowRouteAsync(ResolveMac(_routeQuery));
+    }
+
+    private async Task ShowRouteAsync(string? mac)
+    {
+        _routeBusy = true;
+        try
+        {
+            if (mac is not null)
+            {
+                _routeQuery = NameOf(mac);
+            }
+
+            await State.FindRouteAsync(mac);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Route search for {Mac} failed.", mac);
+            Toasts.Show($"Couldn't search for that route: {ex.Message}", ToastLevel.Danger);
+        }
+        finally
+        {
+            _routeBusy = false;
+        }
+    }
+
+    private async Task ClearRouteAsync()
+    {
+        _routeQuery = "";
+        await ShowRouteAsync(null);
+    }
+
+    private async Task OnReachFromChangedAsync(ChangeEventArgs e)
+    {
+        _reachBusy = true;
+        try
+        {
+            await State.CheckReachabilityAsync(e.Value?.ToString());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Reachability sweep from {From} failed.", e.Value);
+            Toasts.Show($"Couldn't run the reachability sweep: {ex.Message}", ToastLevel.Danger);
+        }
+        finally
+        {
+            _reachBusy = false;
+        }
+    }
+
+    private async Task ToggleNodeAsync(MeshNodeDto node)
+    {
+        if (_toggleBusy)
+        {
+            return;
+        }
+
+        if (node.IsGateway)
+        {
+            Toasts.Show($"{node.Name} is the gateway - it can't be taken offline.", ToastLevel.Warning);
+            return;
+        }
+
+        _toggleBusy = true;
+        try
+        {
+            var online = !node.IsOnline;
+            var result = await State.SetNodeOnlineAsync(node.Mac, online);
+            if (result.Success)
+            {
+                Toasts.Show($"{node.Name} is now {(online ? "online" : "offline")}.", online ? ToastLevel.Success : ToastLevel.Warning);
+            }
+            else
+            {
+                Toasts.Show(result.Error ?? $"Couldn't change {node.Name}.", ToastLevel.Danger);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Toggling {Mac} failed.", node.Mac);
+            Toasts.Show($"Couldn't change {node.Name}: {ex.Message}", ToastLevel.Danger);
+        }
+        finally
+        {
+            _toggleBusy = false;
+        }
+    }
+
+    private static string StatusText(MeshNodeDto node)
+        => !node.IsOnline ? "Offline" : node.ConnectedToGateway ? "Online" : "Isolated";
+
+    private static string StatusBadge(MeshNodeDto node)
+        => !node.IsOnline ? "bg-secondary" : node.ConnectedToGateway ? "bg-success" : "bg-warning text-dark";
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

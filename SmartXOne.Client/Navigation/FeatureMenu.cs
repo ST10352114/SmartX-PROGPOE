@@ -27,5 +27,10 @@ public static class FeatureMenu
             Title: "Real-Time Command Stream and History",
             Description: "Live device telemetry, manual pump/relay/valve overrides with undo, and the command history behind them.",
             Href: "command-stream"),
+
+        new FeatureMenuItem(
+            Title: "Network Topology and Routing",
+            Description: "See the mesh as a graph, follow the minimum spanning tree to the gateway, search routes by MAC and take nodes offline to watch traffic reroute.",
+            Href: "topology"),
     ];
 }
