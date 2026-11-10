@@ -39,7 +39,7 @@ public sealed class ApiException(string message, HttpStatusCode? statusCode, Exc
 //          cancellation when handling HttpClient failures.
 // Author: Microsoft
 // Title: Make HTTP requests with the HttpClient - .NET
-// Year: 2026
+// Year: 2026d
 // URL/DOI: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient
 // Accessed: 10 November 2026
 

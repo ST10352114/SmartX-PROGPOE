@@ -24,7 +24,7 @@
 //          failed send is reported and the simulator keeps running.
 // Author: Microsoft
 // Title: Make HTTP requests with the HttpClient - .NET
-// Year: 2026
+// Year: 2026d
 // URL/DOI: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient
 // Accessed: 10 November 2026
 

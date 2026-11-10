@@ -4,7 +4,7 @@ namespace SmartXOne.Shared.Collections;
 // Purpose: AVL insertion with height tracking and the LL / RR / LR / RL rebalancing rotations
 // Author: GeeksforGeeks
 // Title: Insertion in an AVL Tree
-// Year: 2026
+// Year: 2026b
 // URL/DOI: https://www.geeksforgeeks.org/dsa/insertion-in-an-avl-tree/
 // Accessed: 10 November 2026
 

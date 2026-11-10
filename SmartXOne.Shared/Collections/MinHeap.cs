@@ -4,7 +4,7 @@ namespace SmartXOne.Shared.Collections;
 // Purpose: Array-backed binary min-heap - parent/child index arithmetic, sift-up on insert, sift-down after removing the root
 // Author: GeeksforGeeks
 // Title: Introduction to Min-Heap
-// Year: 2026
+// Year: 2026c
 // URL/DOI: https://www.geeksforgeeks.org/dsa/introduction-to-min-heap-data-structure/
 // Accessed: 10 November 2026
 

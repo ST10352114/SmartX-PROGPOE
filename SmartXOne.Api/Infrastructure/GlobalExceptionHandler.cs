@@ -10,7 +10,7 @@ namespace SmartXOne.Api.Infrastructure;
 //          including preserving BadHttpRequestException.StatusCode.
 // Author: Microsoft
 // Title: Handle errors in ASP.NET Core; Handle errors in ASP.NET Core APIs
-// Year: 2026
+// Year: 2026b; 2026c
 // URL/DOI: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling,
 //          https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling-api
 // Accessed: 10 November 2026

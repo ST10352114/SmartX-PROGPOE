@@ -15,7 +15,7 @@ namespace SmartXOne.Api.Uploads;
 ///          for computing a SHA-256 digest incrementally as data streams through.
 /// Author: Microsoft
 /// Title: AesGcm Class; IncrementalHash Class (System.Security.Cryptography)
-/// Year: 2026
+/// Year: 2026a
 /// URL: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm,
 ///      https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash
 /// Accessed: 17 October 2026

@@ -283,7 +283,7 @@ public static class SensorEndpoints
     //          file content is never buffered into memory as a whole.
     // Author: Microsoft
     // Title: Upload files in ASP.NET Core - Upload large files with streaming
-    // Year: 2026
+    // Year: 2026e
     // URL/DOI: https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads
     // Accessed: 17 October 2026
     private static async Task<IResult> UploadProfileAsync(

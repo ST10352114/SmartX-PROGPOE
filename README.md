@@ -24,16 +24,23 @@ dashboards:
 - [Prerequisites](#prerequisites)
 - [Getting Started (Visual Studio)](#getting-started-visual-studio)
 - [Getting Started (command line / terminal)](#getting-started-command-line--terminal)
-  — [Running the device simulator](#running-the-device-simulator)
-  — [Running the unit tests](#running-the-unit-tests)
-  — [Encryption key setup](#encryption-key-setup)
+  - [Running the device simulator](#running-the-device-simulator)
+  - [Running the unit tests](#running-the-unit-tests)
+  - [Encryption key setup](#encryption-key-setup)
 - [Using the Application](#using-the-application)
-  — [Part 1 — Sensor Data Ingestion and Telemetry](#part-1--sensor-data-ingestion-and-telemetry)
-  — [Part 2 — Real-Time Command Stream and History](#part-2--real-time-command-stream-and-history)
-  — [Part 3 — Network Topology and Routing](#part-3--network-topology-and-routing)
+  - [Part 1 — Sensor Data Ingestion and Telemetry](#part-1--sensor-data-ingestion-and-telemetry)
+  - [Part 2 — Real-Time Command Stream and History](#part-2--real-time-command-stream-and-history)
+  - [Part 3 — Network Topology and Routing](#part-3--network-topology-and-routing)
 - [Testing Each Feature](#testing-each-feature)
 - [Where the Required Concepts Live](#where-the-required-concepts-live)
 - [Project Structure](#project-structure)
+- [Implementation Report](#implementation-report)
+  - [AVL tree — historical data querying](#avl-tree--historical-data-querying)
+  - [Graph — the mesh model](#graph--the-mesh-model)
+  - [BFS — reachability and fewest hops](#bfs--reachability-and-fewest-hops)
+  - [DFS — connected components](#dfs--connected-components)
+  - [MinHeap — the priority queue behind Prim](#minheap--the-priority-queue-behind-prim)
+  - [Prim's algorithm — the minimum spanning tree](#prims-algorithm--the-minimum-spanning-tree)
 - [Known Limitations (by design)](#known-limitations-by-design)
 - [Video Demonstration](#video-demonstration)
 - [Code Attribution](#code-attribution)
@@ -145,9 +152,9 @@ dotnet test SmartXOne.Api.slnx
 ```
 
 This runs the 30 xUnit tests in `SmartXOne.Tests`: AVL insertion in all four rotation cases,
-duplicate keys, range queries and balance checks after thousands of random inserts; min-heap
+duplicate keys, range queries and balance checks after 1,000 ascending and 500 random inserts; min-heap
 ordering; and BFS, DFS, path reconstruction and Prim's minimum spanning forest (checked against
-Kruskal's algorithm on random meshes, including disconnected ones).
+Kruskal's algorithm on 25 random meshes that are not guaranteed to be connected).
 
 ### Encryption key setup
 
@@ -447,7 +454,7 @@ dotnet test SmartXOne.Api.slnx   # 30 tests, all passing
 
 | Requirement | Location | Notes |
 |---|---|---|
-| **AVL tree** | `SmartXOne.Shared/Collections/AvlTree.cs` | Generic self-balancing BST keyed by `DateTimeOffset`; LL/RR/LR/RL rotations, duplicate timestamps kept in arrival order, pruned `Range(from, to)`. |
+| **AVL tree** | `SmartXOne.Shared/Collections/AvlTree.cs` | Generic self-balancing BST, keyed by UTC `DateTime` for history; LL/RR/LR/RL rotations, duplicate timestamps kept in arrival order, pruned `Range(from, to)`. |
 | **Historical querying** | `SmartXOne.Api/History/TelemetryHistoryStore.cs`, `HistoryEndpoints.cs` | One AVL tree per device, fed by both the Part 1 sensor API and the Part 2 queue; `GET /api/history/{deviceId}?from&to&metric&limit`. |
 | **Graph** | `SmartXOne.Shared/Topology/MeshGraph.cs` | Undirected weighted adjacency list; link cost from distance, RSSI and battery. |
 | **BFS / DFS** | `SmartXOne.Shared/Topology/MeshAlgorithms.cs` | `Queue<T>` BFS for reachability and fewest-hop paths; iterative `Stack<T>` DFS for connected components. |
@@ -489,6 +496,365 @@ SmartXOne.Api.slnx
 └── SmartXOne.Tests/         # xUnit: AvlTreeTests, MinHeapTests, MeshAlgorithmsTests
 ```
 
+## Implementation Report
+
+This section explains how I built the Part 3 data structures and algorithms, what each one does
+for the Network Topology feature, and why I chose it over a simpler alternative. The snippets
+are copied from the repository; `// ...` marks lines I left out for length. Complexities use
+*n* for readings stored per device, *k* for readings a query returns, *V* for mesh nodes and
+*E* for radio links. The simulator's mesh has V = 13 and E = 21.
+
+### How the pieces fit together
+
+```
+Simulator / sensors ──HTTP──► RealtimeEndpoints / SensorRepository
+                                     │ every reading
+                                     ▼
+                         TelemetryHistoryStore ── one AvlTree per device ──► GET /api/history/{id}
+Simulator registers nodes/links, toggles nodes
+                                     ▼
+                         TopologyService ── MeshGraph (adjacency list)
+                                     │ on every change
+                                     ├─► Prim (MinHeap)  → spanning tree → per-node routes, reroute tracking
+                                     ├─► BFS (Queue)     → reachability, fewest-hop comparison path
+                                     └─► DFS (Stack)     → connected components (islands)
+                                     ▼
+                         GET /api/topology, /mst, /route, /reachable, /components
+                                     ▼
+              TopologyState (Blazor, polls every 3 s, only re-fetches when Version changes)
+                                     ▼
+              Topology.razor: MeshMap SVG, route search, reachability, MST, components, history
+```
+
+All the algorithms live in `SmartXOne.Shared`, so they have no web dependencies and the
+`SmartXOne.Tests` project can test them directly. The API owns the single live copy of the mesh
+and the history; the client never computes routes itself, it only draws what the API returns.
+
+### AVL tree — historical data querying
+
+**Role.** Every reading that reaches the gateway, from the Part 2 queue or the Part 1 sensor API,
+goes into `TelemetryHistoryStore`. That store keeps one `AvlTree<DateTime, HistoricalReadingDto>`
+per device, keyed by the reading's UTC timestamp. The Sensor History panel's question — "give me
+this sensor's temperature between 10:00 and 10:15" — becomes a single `Range(from, to)` call.
+
+**Why a balanced tree.** Readings mostly arrive in time order. A plain binary search tree given
+sorted keys degenerates into a linked list of height *n*, so every insert and every query goes
+back to O(n). An AVL tree (named after its inventors, Adelson-Velsky and Landis) keeps each
+node's two subtree heights within one of each other by rotating after inserts,
+so its height stays O(log n) whatever order the keys arrive in. I based the insertion and
+rotation logic on GeeksforGeeks (2026b) and adapted it to be generic, iterative where it matters
+(in-order traversal), and to keep duplicate timestamps instead of discarding them.
+
+The rebalance step handles all four cases. LL and RR need one rotation; LR and RL first
+straighten the child, then rotate the node:
+
+```csharp
+private static Node Rebalance(Node node)
+{
+    var balance = BalanceOf(node);
+
+    if (balance > 1)
+    {
+        // Left-heavy. LR case: the left child leans right, so straighten it first.
+        if (BalanceOf(node.Left!) < 0)
+        {
+            node.Left = RotateLeft(node.Left!);
+        }
+
+        return RotateRight(node); // LL case (or LR after the first rotation)
+    }
+
+    if (balance < -1)
+    {
+        // Right-heavy. RL case: the right child leans left, so straighten it first.
+        if (BalanceOf(node.Right!) > 0)
+        {
+            node.Right = RotateRight(node.Right!);
+        }
+
+        return RotateLeft(node); // RR case (or RL after the first rotation)
+    }
+
+    return node;
+}
+```
+
+Two simulator nodes can report in the same tick, so two readings can share a timestamp. Rather
+than overwrite one, a node holds a `List<TValue>` and a repeated key appends to it without
+changing the tree's shape:
+
+```csharp
+var cmp = Compare(key, node.Key);
+if (cmp == 0)
+{
+    node.Values.Add(value); // same key: keep both, structure unchanged
+    return node;
+}
+```
+
+The range query is where the tree pays off. It only goes left when smaller keys could still be in
+range and only goes right when larger ones could, so whole subtrees outside the window are never
+visited:
+
+```csharp
+var aboveFrom = Compare(node.Key, from) > 0;
+var belowTo = Compare(node.Key, to) < 0;
+
+// Only descend left if smaller keys could still be in range, and right
+// if larger ones could - this pruning is what makes the query O(log n + k).
+if (aboveFrom)
+{
+    CollectRange(node.Left, from, to, results);
+}
+// ... add this node's readings if from <= key <= to ...
+if (belowTo)
+{
+    CollectRange(node.Right, from, to, results);
+}
+```
+
+Because the walk is in-order, results come back already sorted by time, so the API and the chart
+never sort them.
+
+| Operation | AVL tree (mine) | Unsorted `List<T>` | Sorted `List<T>` | Unbalanced BST (time-ordered input) |
+|---|---|---|---|---|
+| Insert | O(log n) | O(1) | O(n) — shifts elements | O(n) |
+| Range query | O(log n + k) | O(n) — full scan | O(log n + k) | O(n) |
+| Oldest / newest | O(log n) | O(n) | O(1) | O(n) |
+| Space | O(n) | O(n) | O(n) | O(n) |
+
+A sorted list matches the tree on queries but pays O(n) per insert. That matters here because
+inserts outnumber queries by a wide margin: the simulator writes 30 readings every 3 seconds,
+while a person runs a query now and then. The tests in `AvlTreeTests` check each rotation case on
+its own, then insert 1,000 ascending keys and 500 random ones and assert that the tree is still
+a valid, balanced search tree (`IsBalancedSearchTree`) with logarithmic height.
+
+### Graph — the mesh model
+
+**Role.** `MeshGraph` is the gateway's model of the physical network: nodes (MAC, subnet,
+site-plan position, battery, online flag) and undirected links (two MACs plus measured RSSI). It
+is an adjacency list — `Dictionary<string, List<MeshLink>>` keyed by MAC — so finding a node's
+neighbours costs O(degree) rather than the O(V) row scan an adjacency matrix needs. That also
+means O(V + E) space instead of O(V²). A mesh is sparse (each node only hears a few neighbours),
+so for the 13-node demo that is 21 links instead of 169 matrix cells, and the gap widens as the
+mesh grows.
+
+**Link cost.** Each link gets one number that combines everything that makes a hop expensive:
+
+```csharp
+return 1
+       + a.DistanceTo(b) / 10
+       + Math.Max(0, -link.Rssi - 50) / 10.0
+       + (100 - Math.Min(a.Battery, b.Battery)) / 25.0;
+```
+
+The `1` is a fixed per-hop charge, so a path with more hops always costs something more. Distance
+and weak signal (RSSI below -50 dBm) both raise the transmit power and the retries a hop needs.
+The battery term uses the *weaker* end of the link, so a link next to a nearly flat node is
+expensive and the tree routes around it while there is an alternative. Taking a node offline
+doesn't delete its links; algorithms just skip offline nodes, so bringing it back restores the
+mesh exactly as it was.
+
+### BFS — reachability and fewest hops
+
+**Role.** Breadth-first search, built on a `Queue<string>` (GeeksforGeeks, 2026a), answers "what
+can this node, or this subnet, still reach?" for the Reachability panel. It also produces the
+fewest-hop path that the route panel shows next to the spanning-tree route. BFS visits nodes in
+order of hop distance, so the first time it reaches a node, the hop count is the minimum:
+
+```csharp
+while (queue.Count > 0)
+{
+    var mac = queue.Dequeue();
+    foreach (var link in graph.LinksOf(mac))
+    {
+        var next = MeshGraph.OtherEnd(link, mac);
+        if (hops.ContainsKey(next) || !graph.GetNode(next).IsOnline)
+        {
+            continue;
+        }
+
+        hops[next] = hops[mac] + 1;
+        parent?.Add(next, mac);
+        queue.Enqueue(next);
+    }
+}
+```
+
+Each node is enqueued once and each link examined twice, so one sweep is O(V + E). The obvious
+alternative — checking each target separately with its own search — costs O(V · (V + E)) for the
+same answer. A subnet sweep currently runs one BFS per online node in the subnet and keeps the
+smallest hop count (O(s · (V + E)) for *s* start nodes). A multi-source BFS that seeds the queue
+with the whole subnet at hop 0 would bring that back to O(V + E); with four nodes per subnet the
+difference wasn't worth the extra code yet.
+
+### DFS — connected components
+
+**Role.** When enough nodes go offline, part of the mesh can be cut off from the gateway entirely.
+`ConnectedComponents` finds every island with an iterative depth-first search on an explicit
+`Stack<string>` (GeeksforGeeks, 2025), starting from the gateway so that its island is always
+listed first:
+
+```csharp
+var stack = new Stack<string>();
+stack.Push(startNode.Mac);
+
+while (stack.Count > 0)
+{
+    var mac = stack.Pop();
+    component.Add(mac);
+
+    foreach (var link in graph.LinksOf(mac))
+    {
+        var next = MeshGraph.OtherEnd(link, mac);
+        if (graph.GetNode(next).IsOnline && visited.Add(next))
+        {
+            stack.Push(next);
+        }
+    }
+}
+```
+
+A shared `visited` set across all start nodes makes the whole pass O(V + E). I chose an explicit
+stack over recursion so a long chain of nodes can't overflow the call stack. In the README test
+above, taking `PMP-01`, `PMP-02` and `GHA-02` offline leaves `PMP-03` and `PMP-04` as a second
+component with `containsGateway: false`, which the page flags as an isolated island.
+
+### MinHeap — the priority queue behind Prim
+
+**Role.** Prim's algorithm repeatedly needs "the cheapest link leaving the tree so far". I wrote
+`MinHeap<T>`, an array-backed binary heap with a pluggable `IComparer<T>` (GeeksforGeeks, 2026c).
+The parent of index *i* is at (i — 1) / 2, so `Push` bubbles a new item up and `Pop` moves the
+last item to the root and sinks it:
+
+```csharp
+private void SiftUp(int index)
+{
+    while (index > 0)
+    {
+        var parent = (index - 1) / 2;
+        if (Compare(_items[index], _items[parent]) >= 0)
+        {
+            return;
+        }
+
+        (_items[index], _items[parent]) = (_items[parent], _items[index]);
+        index = parent;
+    }
+}
+```
+
+Both operations are O(log m) for *m* items in the heap, and `Peek` is O(1). Finding the minimum
+by scanning an unsorted list instead is O(m) per pop, which turns Prim into O(V · E). .NET's
+built-in `PriorityQueue<TElement,TPriority>` would also work — I already use it for Part 2's
+critical alerts — but writing the heap myself let me test its ordering directly
+(`MinHeapTests`), and Prim passes it a comparer that breaks cost ties on MAC address, which keeps
+the tree stable between recomputes.
+
+### Prim's algorithm — the minimum spanning tree
+
+**Role.** Prim's algorithm (Prim, 1957) builds the tree every node uses to reach the gateway. It
+starts at the gateway and repeatedly adds the cheapest link that connects a new node, until no
+link leads anywhere new. I used the "lazy" form (GeeksforGeeks, 2026d): instead of decreasing
+keys inside the heap, it pushes every candidate link and throws away stale ones when they are
+popped:
+
+```csharp
+while (heap.TryPop(out var candidate))
+{
+    if (!inTree.Add(candidate.To))
+    {
+        continue; // stale: reached more cheaply already
+    }
+
+    edges.Add(candidate);
+    parent[candidate.To] = candidate.From;
+    total += candidate.Cost;
+    PushFrontier(graph, candidate.To, inTree, heap);
+}
+```
+
+Every link is pushed at most twice, so the cost is O(E log E), which is O(E log V) because
+E ≤ V² (Cormen et al., 2022). The naive approach — scan every link for the cheapest crossing one
+each time a node is added — is O(V · E). A real mesh can also split in two, so when the heap runs
+dry with online nodes still outside the tree, the loop starts again from the next unvisited node.
+The result is a minimum spanning *forest*: the gateway's tree first, then one tree per isolated
+pocket, instead of silently dropping the cut-off nodes. `MeshAlgorithmsTests` checks the total
+cost against an independent Kruskal implementation (Kruskal, 1956) on 25 random meshes, which
+are not guaranteed to be connected, so a mistake in either would show up as a mismatch.
+
+**Routing and self-healing.** `TopologyService.RecomputeLocked` runs Prim again after every change
+(a node or link registered, a node going offline or online, a battery update), rebuilds each
+node's route by following parent pointers from the node back to the gateway, and compares every
+route with the one before:
+
+```csharp
+if (_routes.TryGetValue(mac, out var oldPath) && !oldPath.SequenceEqual(newPath, StringComparer.OrdinalIgnoreCase))
+{
+    var avoided = oldPath
+        .Where(hop => _graph.TryGetNode(hop, out var n) && !n.IsOnline)
+        .ToList();
+    _lastChange[mac] = new RouteChange(oldPath, avoided);
+    // ...
+}
+```
+
+That is what drives the **Rerouted** badge: the route endpoint returns the new path, the previous
+path, and the offline nodes the old path went through. A recompute costs O(E log V + V · d) for a
+tree of depth *d*. With 13 nodes that takes well under a millisecond, so recomputing on every
+change was simpler and safer than updating the tree incrementally. A `Version` counter goes up
+on each recompute, and the client only fetches the tree, the routes and the reachability again
+when it changes.
+
+**Prim's MST and power-efficient mesh routing.** A spanning tree connects every node with exactly
+V — 1 links and no loops, and a *minimum* one does it with the smallest total link cost. Because
+my link cost rises with distance, weak signal and low battery, the tree is the cheapest backbone
+for the whole mesh: each node keeps one upstream parent, traffic never circles, and links next to
+weak batteries are left out while there is any alternative. The spare links stay in the graph,
+which is what makes healing possible — when a node fails, Prim picks the next-cheapest links
+around it.
+
+Real IoT mesh protocols make the same trade-offs in different ways:
+
+- **ESP-WIFI-MESH** (Espressif's mesh on top of Wi-Fi) is the closest match. Its documentation
+  describes a tree topology with a single root node that is the only link to the outside
+  network. Each node picks a parent, ignoring candidates below an RSSI threshold and preferring
+  the shallowest layer. When a parent fails, its children reconnect to a new parent (Espressif
+  Systems, n.d.-b). My gateway plays the root's role, and my RSSI and distance terms play the
+  role of its parent-selection rules.
+- **Zigbee** discovers routes on demand with AODV. Each link has a cost based on link quality,
+  a path's cost is the sum of its link costs, the lowest-cost route is chosen, and a broken route
+  is repaired by running discovery again (Silicon Labs, n.d.-b). This is the same "sum of link
+  costs from signal quality" model my cost function uses, applied per destination rather than to
+  a whole tree.
+- **Thread** routers use distance-vector routing with a cost based on two-way link quality, keep
+  path costs to every other router (up to 32 active routers), and switch to the next most
+  suitable route when one becomes unusable (Silicon Labs, n.d.-a).
+- **ESP-NOW** is a connectionless, peer-to-peer protocol. Its documentation only describes direct
+  one-to-one or broadcast transmission between paired devices (Espressif Systems, n.d.-a), so any
+  multi-hop forwarding — and a tree like mine — would have to be built by the application on top
+  of it.
+
+The difference I have to own is that a minimum spanning tree minimises the *total* cost of the
+mesh, not each node's own path. Zigbee and Thread pick a least-cost route per destination, which
+is a shortest-path problem (Dijkstra's algorithm, not Prim's). In my mesh, `PMP-04` routes over
+five hops through Greenhouse B when `PMP-01` is offline, even though a three-hop path through
+Greenhouse A exists. The route panel shows that fewest-hop path next to the tree route so the
+difference is visible. For a battery-powered mesh, a cheap shared backbone is a sensible default,
+because each node relays for fewer neighbours. If per-node latency mattered more, the next step
+would be Dijkstra over the same graph and the same `MinHeap<T>` — see
+[Known Limitations](#known-limitations-by-design).
+
+### Thread safety and error handling
+
+The API serves requests on many threads while the background service writes history, so both
+`TopologyService` and `TelemetryHistoryStore` guard all their state with a single .NET 9+ `Lock`.
+None of the data structures above is thread-safe on its own, and one lock per service is easy to
+reason about at this scale. Every public method validates its input before the `try`, catches,
+logs with context and rethrows. The endpoints translate known exceptions to ProblemDetails
+(`KeyNotFoundException` → 404, `ArgumentException` → 400, `InvalidOperationException` → 409),
+and the global `IExceptionHandler` catches anything else (Microsoft, 2026b; Microsoft, 2026c).
+
 ## Known Limitations (by design)
 
 - In-memory storage only — no database, no persistence across restarts (encrypted attachment
@@ -516,25 +882,45 @@ advanced arrays/lists, recursion) runs in the actual application.
 ## Code Attribution
 
 Where a class or method in this project uses an approach, API, or pattern taken from external
-documentation, the comment directly above it says so (author, title, year, URL, access date).
-Every one of those in-code attributions has a matching entry below, listed alphabetically by
-author in Harvard (Anglia Ruskin) style.
+documentation, the comment directly above it says so (purpose, author, title, year, URL, access
+date). Every one of those in-code attributions has a matching entry below, listed alphabetically
+by author in Harvard (Anglia Ruskin) style. Where one author has several sources from the same
+year, the letter in the reference (for example `2026b`, `n.d.-a`) also appears in the comment's
+`Year:` line, so each comment points at exactly one entry. The list also includes the books,
+papers and protocol documentation cited in the [Implementation Report](#implementation-report).
 
 ## References
 
+- Cormen, T.H., Leiserson, C.E., Rivest, R.L. and Stein, C., 2022. *Introduction to Algorithms*. 4th ed. Cambridge, MA: MIT Press.
+- Espressif Systems, n.d.-a. *ESP-NOW — ESP32 — ESP-IDF Programming Guide*. [online] Available at: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html> [Accessed 10 November 2026].
+- Espressif Systems, n.d.-b. *ESP-WIFI-MESH — ESP32 — ESP-IDF Programming Guide*. [online] Available at: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/esp-wifi-mesh.html> [Accessed 10 November 2026].
 - GeeksforGeeks, n.d. *C# | Operator Overloading*. [online] Available at: <https://www.geeksforgeeks.org/c-sharp/c-sharp-operator-overloading/> [Accessed 17 October 2026].
+- GeeksforGeeks, 2025. *Iterative Depth First Traversal of Graph*. [online] Available at: <https://www.geeksforgeeks.org/dsa/iterative-depth-first-traversal/> [Accessed 10 November 2026].
+- GeeksforGeeks, 2026a. *Breadth First Search or BFS for a Graph*. [online] Available at: <https://www.geeksforgeeks.org/dsa/breadth-first-search-or-bfs-for-a-graph/> [Accessed 10 November 2026].
+- GeeksforGeeks, 2026b. *Insertion in an AVL Tree*. [online] Available at: <https://www.geeksforgeeks.org/dsa/insertion-in-an-avl-tree/> [Accessed 10 November 2026].
+- GeeksforGeeks, 2026c. *Introduction to Min-Heap*. [online] Available at: <https://www.geeksforgeeks.org/dsa/introduction-to-min-heap-data-structure/> [Accessed 10 November 2026].
+- GeeksforGeeks, 2026d. *Prim's Algorithm for Minimum Spanning Tree (MST)*. [online] Available at: <https://www.geeksforgeeks.org/dsa/prims-minimum-spanning-tree-mst-greedy-algo-5/> [Accessed 10 November 2026].
+- Kruskal, J.B., 1956. On the shortest spanning subtree of a graph and the traveling salesman problem. *Proceedings of the American Mathematical Society*, 7(1), pp.48–50. https://doi.org/10.1090/S0002-9939-1956-0078686-7
 - Microsoft, 2016. *.NET class libraries*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/standard/class-libraries> [Accessed 17 October 2026].
+- Microsoft, 2022. *.NET 6 breaking change: Exception handling in hosting*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/core/compatibility/core-libraries/6.0/hosting-exception-handling> [Accessed 10 November 2026].
 - Microsoft, 2023. *.NET Observability with OpenTelemetry*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel> [Accessed 11 September 2026].
-- Microsoft, 2025. *AesGcm Class; IncrementalHash Class (System.Security.Cryptography)*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm> and <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash> [Accessed 17 October 2026].
-- Microsoft, 2025. *Arrays (C# programming guide)*. [online] Available at: <https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/> [Accessed 9 September 2026].
-- Microsoft, 2025. *ASP.NET Core Blazor WebAssembly*. [online] Available at: <https://learn.microsoft.com/aspnet/core/blazor/hosting-models#blazor-webassembly> [Accessed 11 September 2026].
-- Microsoft, 2025. *Generics (C# programming guide)*. [online] Available at: <https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics> [Accessed 12 September 2026].
-- Microsoft, 2025. *IFormFile and multipart file uploads in ASP.NET Core*. [online] Available at: <https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads> [Accessed 11 September 2026].
-- Microsoft, 2025. *Minimal APIs overview*. [online] Available at: <https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis> [Accessed 9 September 2026].
-- Microsoft, 2026. *Upload files in ASP.NET Core — Upload large files with streaming*. [online] Available at: <https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads> [Accessed 17 October 2026].
+- Microsoft, 2025a. *Arrays (C# programming guide)*. [online] Available at: <https://learn.microsoft.com/dotnet/csharp/programming-guide/arrays/> [Accessed 9 September 2026].
+- Microsoft, 2025b. *ASP.NET Core Blazor WebAssembly*. [online] Available at: <https://learn.microsoft.com/aspnet/core/blazor/hosting-models#blazor-webassembly> [Accessed 11 September 2026].
+- Microsoft, 2025c. *Generics (C# programming guide)*. [online] Available at: <https://learn.microsoft.com/dotnet/csharp/fundamentals/types/generics> [Accessed 12 September 2026].
+- Microsoft, 2025d. *Handle errors in ASP.NET Core Blazor apps*. [online] Available at: <https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/handle-errors> [Accessed 10 November 2026].
+- Microsoft, 2025e. *IFormFile and multipart file uploads in ASP.NET Core*. [online] Available at: <https://learn.microsoft.com/aspnet/core/mvc/models/file-uploads> [Accessed 11 September 2026].
+- Microsoft, 2025f. *Minimal APIs overview*. [online] Available at: <https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis> [Accessed 9 September 2026].
+- Microsoft, 2026a. *AesGcm Class; IncrementalHash Class (System.Security.Cryptography)*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm> and <https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.incrementalhash> [Accessed 17 October 2026].
+- Microsoft, 2026b. *Handle errors in ASP.NET Core*. [online] Available at: <https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling> [Accessed 10 November 2026].
+- Microsoft, 2026c. *Handle errors in ASP.NET Core APIs*. [online] Available at: <https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling-api> [Accessed 10 November 2026].
+- Microsoft, 2026d. *Make HTTP requests with the HttpClient — .NET*. [online] Available at: <https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient> [Accessed 10 November 2026].
+- Microsoft, 2026e. *Upload files in ASP.NET Core — Upload large files with streaming*. [online] Available at: <https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads> [Accessed 17 October 2026].
 - Microsoft, n.d. *ASP.NET Web APIs — Rest APIs with .NET and C#*. [online] Available at: <https://dotnet.microsoft.com/en-us/apps/aspnet/apis> [Accessed 17 October 2026].
-- Telerik, n.d. *What is Blazor WebAssembly (WASM)?* [online] Available at: <https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)> [Accessed 17 October 2026].
-- Yigitbasioglu, O.M. and Velcu, O., 2012. A review of dashboards in performance management: implications for design and research. *International Journal of Accounting Information Systems*, 13(1), pp.41–59.
+- Prim, R.C., 1957. Shortest connection networks and some generalizations. *Bell System Technical Journal*, 36(6), pp.1389–1401. https://doi.org/10.1002/j.1538-7305.1957.tb01515.x
+- Progress Telerik, 2025. *What is Blazor WebAssembly (WASM)?* [online] Available at: <https://www.telerik.com/faqs/blazor/what-is-blazor-webassembly-(wasm)> [Accessed 10 November 2026].
+- Silicon Labs, n.d.-a. *Routing and Network Connectivity — Thread Fundamentals — OpenThread*. [online] Available at: <https://docs.silabs.com/openthread/2.7.1/thread-fundamentals/05-routing-and-network-connectivity> [Accessed 10 November 2026].
+- Silicon Labs, n.d.-b. *Table Routing — Zigbee Concepts: Networking*. [online] Available at: <https://docs.silabs.com/zigbee/9.0.1/zigbee-concepts-network/table-routing> [Accessed 10 November 2026].
+- Yigitbasioglu, O.M. and Velcu, O., 2012. A review of dashboards in performance management: implications for design and research. *International Journal of Accounting Information Systems*, 13(1), pp.41–59. https://doi.org/10.1016/j.accinf.2011.08.002
 - Zipit Wireless, n.d. *What Are IoT Sensors? Types, Uses, and Examples*. [online] Available at: <https://www.zipitwireless.com/blog/what-are-iot-sensors-types-uses-and-examples> [Accessed 11 September 2026].
 - Google. *Gemini shared conversation*. Available at: https://share.google/aimode/KmuvJF1Ei0NYTfYnU
 ## AI Usage Disclosure

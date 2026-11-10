@@ -29,7 +29,7 @@ public sealed record SpanningForest(
 // Purpose: Queue-based breadth-first search - reachability and fewest-hop paths
 // Author: GeeksforGeeks
 // Title: Breadth First Search or BFS for a Graph
-// Year: 2026
+// Year: 2026a
 // URL/DOI: https://www.geeksforgeeks.org/dsa/breadth-first-search-or-bfs-for-a-graph/
 // Accessed: 10 November 2026
 //
@@ -45,7 +45,7 @@ public sealed record SpanningForest(
 // Purpose: Prim's minimum spanning tree driven by a min-heap of candidate edges
 // Author: GeeksforGeeks
 // Title: Prim's Algorithm for Minimum Spanning Tree (MST)
-// Year: 2026
+// Year: 2026d
 // URL/DOI: https://www.geeksforgeeks.org/dsa/prims-minimum-spanning-tree-mst-greedy-algo-5/
 // Accessed: 10 November 2026
 

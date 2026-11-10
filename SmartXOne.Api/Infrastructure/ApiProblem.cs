@@ -5,7 +5,7 @@ namespace SmartXOne.Api.Infrastructure;
 //          Results.Problem instead of bare status codes or plain strings.
 // Author: Microsoft
 // Title: Handle errors in ASP.NET Core APIs
-// Year: 2026
+// Year: 2026c
 // URL/DOI: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling-api
 // Accessed: 10 November 2026
 
