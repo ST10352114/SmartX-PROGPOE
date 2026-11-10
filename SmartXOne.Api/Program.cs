@@ -13,6 +13,7 @@ using SmartXOne.Api.Issues;
 using SmartXOne.Api.Realtime;
 using SmartXOne.Api.Recommendations;
 using SmartXOne.Api.Sensors;
+using SmartXOne.Api.Topology;
 using SmartXOne.Api.Uploads;
 using SmartXOne.Shared.Contracts;
 using SmartXOne.Shared.Demo;
@@ -24,6 +25,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Part 3 - per-device telemetry history (AVL-indexed by timestamp), fed by
 // both the sensor API and the realtime queue consumer.
 builder.Services.AddSingleton<TelemetryHistoryStore>();
+
+// Part 3 - mesh topology: graph + cached minimum spanning tree, recomputed on change.
+builder.Services.AddSingleton<TopologyService>();
 builder.Services.AddSingleton<SensorRepository>();
 builder.Services.AddSingleton<AttachmentEncryptionKeyProvider>();
 builder.Services.AddSingleton<IssueRepository>();
@@ -125,6 +129,9 @@ app.MapRecommendationEndpoints();
 
 // --- Part 3: telemetry history range queries ---
 app.MapHistoryEndpoints();
+
+// --- Part 3: mesh topology, MST routing, BFS reachability, DFS components ---
+app.MapTopologyEndpoints();
 
 
 // The start-up demo is informational only, so a failure in it is logged and
