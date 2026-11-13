@@ -18,6 +18,10 @@ dashboards:
   BFS reachability and DFS island detection, rerouting when a node goes offline, and a
   per-sensor history kept in a self-balancing AVL tree for fast time-range queries.
 
+  PART 3 VIDEO:
+  https://youtu.be/4rfxwvqHqyg?si=UE67KFkFJEH8Lzq-
+  
+
 ## Table of Contents
 
 - [Architecture](#architecture)
